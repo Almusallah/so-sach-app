@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: so-sach
+    runtime: node
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 23.9.0
+      - key: ANTHROPIC_API_KEY
+        sync: false

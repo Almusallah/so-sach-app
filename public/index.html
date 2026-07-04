@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sổ Sạch — Chụp hoá đơn, sổ sách tự lo</title>
+  <meta name="description" content="Sổ Sạch: trợ lý kế toán AI trên Zalo cho hộ kinh doanh. Chụp ảnh hoá đơn → sổ thu chi → tờ khai thuế soạn sẵn. Từ 2026 hết thuế khoán — Sổ Sạch lo phần sổ sách." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/"><span class="brand-mark">📒</span> Sổ Sạch</a>
+      <nav class="nav-actions">
+        <a class="btn ghost" href="#app" data-i18n="nav_app">Sổ của tôi</a>
+        <button class="btn ghost" id="langBtn">EN</button>
+      </nav>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="hero-inner">
+      <div class="hero-copy">
+        <div class="eyebrow" data-i18n="hero_eyebrow">Từ 01/01/2026 hết thuế khoán — 5,2 triệu hộ kinh doanh phải ghi sổ</div>
+        <h1 data-i18n="hero_h1">Chụp hoá đơn.<br/>Sổ sách tự lo.</h1>
+        <p data-i18n="hero_p">Gửi ảnh hoá đơn vào Zalo, <b>Sổ Sạch</b> tự ghi sổ thu chi, canh ngưỡng thuế giúp bạn và soạn sẵn tờ khai quý — bằng tiếng Việt dễ hiểu, không cần biết kế toán.</p>
+        <div class="hero-cta">
+          <a href="#app" class="btn solid big" data-i18n="hero_cta1">Dùng thử ngay — miễn phí</a>
+          <a href="#how" class="btn outline big" data-i18n="hero_cta2">Xem cách hoạt động</a>
+        </div>
+        <div class="hero-trust">
+          <span data-i18n="trust1">📱 Chạy trong Zalo</span>
+          <span data-i18n="trust2">🔔 Báo trước khi chạm ngưỡng thuế</span>
+          <span data-i18n="trust3">📄 Tờ khai 01/CNKD soạn sẵn</span>
+        </div>
+      </div>
+      <div class="hero-chat" aria-hidden="true">
+        <div class="chat-head">💬 Zalo — Sổ Sạch</div>
+        <div class="chat-body">
+          <div class="msg me"><span class="photo">📷 hoadon_sang.jpg</span></div>
+          <div class="msg bot">✅ Đã ghi vào Sổ Sạch:<br/>📉 CHI 385.000đ<br/>Đại lý gạo Minh Tâm — Mua gạo, nguyên liệu<br/>Ngày: 04/07/2026</div>
+          <div class="msg me">sổ</div>
+          <div class="msg bot">📒 Sổ tháng 7:<br/>Thu: 18.450.000đ · Chi: 7.120.000đ<br/>Lãi gộp: 11.330.000đ<br/><br/>⚠️ Doanh thu cả năm dự kiến 214 triệu — còn cách ngưỡng chịu thuế 500 triệu. Yên tâm bán hàng!</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="strip">
+    <div class="strip-inner">
+      <div class="s-item"><b>5,2M</b><span data-i18n="s1">hộ kinh doanh phải tự khai từ 2026</span></div>
+      <div class="s-item"><b>30/04/2026</b><span data-i18n="s2">hạn nộp tờ khai quý đầu tiên</span></div>
+      <div class="s-item"><b>69.000đ</b><span data-i18n="s3">mỗi tháng — rẻ hơn một bữa trưa</span></div>
+    </div>
+  </section>
+
+  <main>
+    <section id="how">
+      <div class="section-head">
+        <div class="kicker" data-i18n="how_kicker">Cách hoạt động</div>
+        <h2 data-i18n="how_h2">Ba bước, không cần biết kế toán</h2>
+      </div>
+      <div class="how-grid">
+        <div class="how-card"><div class="n">1</div><h3 data-i18n="how1_t">Chụp &amp; gửi</h3><p data-i18n="how1_p">Chụp hoá đơn, biên lai, hay tin nhắn chuyển khoản — gửi vào Zalo Sổ Sạch như gửi cho bạn bè.</p></div>
+        <div class="how-card"><div class="n">2</div><h3 data-i18n="how2_t">AI ghi sổ</h3><p data-i18n="how2_p">Sổ Sạch đọc ảnh, tự phân loại thu/chi, ghi vào sổ. Sai thì sửa một chạm. Cuối tháng có tổng kết rõ ràng.</p></div>
+        <div class="how-card"><div class="n">3</div><h3 data-i18n="how3_t">Tờ khai soạn sẵn</h3><p data-i18n="how3_p">Đến kỳ, tờ khai 01/CNKD đã điền sẵn số liệu. Ký, nộp — hoặc gửi thẳng cho đại lý thuế của bạn.</p></div>
+      </div>
+    </section>
+
+    <!-- ======== APP ======== -->
+    <section id="app">
+      <div class="section-head">
+        <div class="kicker" data-i18n="app_kicker">Sổ của tôi · bản dùng thử</div>
+        <h2 data-i18n="app_h2">Thử ngay trên web</h2>
+        <p data-i18n="app_p">Đây chính là sản phẩm — phiên bản web. Trên Zalo, mọi thứ diễn ra trong khung chat.</p>
+      </div>
+
+      <div class="app-grid">
+        <!-- Colonna sinistra: aggiungi -->
+        <div class="panel">
+          <h3 data-i18n="add_title">➕ Thêm hoá đơn</h3>
+          <label class="drop" id="drop">
+            <input type="file" id="file" accept="image/*" capture="environment" hidden />
+            <span class="drop-ico">📷</span>
+            <span data-i18n="drop_label">Chụp hoặc chọn ảnh hoá đơn</span>
+            <small data-i18n="drop_hint">AI sẽ đọc và điền sẵn — bạn chỉ xác nhận</small>
+          </label>
+          <div class="or" data-i18n="or">hoặc nhập tay</div>
+          <form id="manualForm" class="manual">
+            <div class="seg" id="segType">
+              <button type="button" class="seg-btn active" data-type="thu" data-i18n="seg_thu">📈 Thu</button>
+              <button type="button" class="seg-btn" data-type="chi" data-i18n="seg_chi">📉 Chi</button>
+            </div>
+            <input type="text" id="mAmount" inputmode="numeric" data-i18n-ph="ph_amount" placeholder="Số tiền (đ)" required />
+            <input type="text" id="mWho" data-i18n-ph="ph_who" placeholder="Khách / nhà cung cấp" />
+            <input type="text" id="mDesc" data-i18n-ph="ph_desc" placeholder="Mô tả" />
+            <input type="date" id="mDate" />
+            <button class="btn solid block" type="submit" data-i18n="add_btn">Ghi vào sổ</button>
+          </form>
+          <div class="profile-box">
+            <label data-i18n="cat_label">Ngành nghề (quyết định thuế suất)</label>
+            <select id="category"></select>
+            <input type="text" id="bizName" data-i18n-ph="ph_name" placeholder="Tên hộ kinh doanh (cho tờ khai)" />
+          </div>
+        </div>
+
+        <!-- Colonna destra: dashboard -->
+        <div class="panel">
+          <h3 data-i18n="dash_title">📊 Tổng quan</h3>
+          <div class="cards" id="cards"></div>
+          <div class="bars" id="bars"></div>
+          <div class="tax-box" id="taxBox"></div>
+          <button class="btn solid block" id="declBtn" data-i18n="decl_btn">📄 Xem tờ khai quý (bản nháp)</button>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:18px">
+        <h3 data-i18n="ledger_title">📒 Sổ thu chi</h3>
+        <div class="ledger" id="ledger"></div>
+      </div>
+    </section>
+
+    <section class="zalo-banner">
+      <div>
+        <div class="kicker" style="color:#0a6cff" data-i18n="zb_kicker">Trên Zalo</div>
+        <h2 data-i18n="zb_h2">Sổ Sạch sống trong Zalo của bạn</h2>
+        <p data-i18n="zb_p">Không app mới, không mật khẩu mới. Kết bạn với OA Sổ Sạch, gửi ảnh hoá đơn là xong. Bản OA đang mở cho 100 hộ đầu tiên tại TP.HCM.</p>
+      </div>
+      <a class="btn solid big" style="background:#0a6cff" href="mailto:frassiyuri@gmail.com?subject=So Sach - dang ky OA" data-i18n="zb_btn">Đăng ký 100 hộ đầu tiên</a>
+    </section>
+  </main>
+
+  <footer>
+    <div class="foot-inner">
+      <span data-i18n="foot">© 2026 Sổ Sạch — bản dùng thử. Số liệu thuế là ước tính, kiểm tra với đại lý thuế trước khi nộp.</span>
+      <span><a href="mailto:frassiyuri@gmail.com">frassiyuri@gmail.com</a></span>
+    </div>
+  </footer>
+
+  <!-- Modal conferma estrazione -->
+  <div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
+  <div class="toast" id="toast"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
