@@ -177,7 +177,7 @@ def build(lang, filename):
          ("engine live (Bottega)" if E else "motore live (Bottega)"), "$0.3M"],
         [("5 · Làng Nghề / OTOP Direct" if E else "5 · Làng Nghề / OTOP Direct"),
          ("VN craft villages · TH OTOP" if E else "villaggi artigiani VN · OTOP TH"), ("8–12% take" if E else "take 8–12%"),
-         ("LATER — file MoIT early" if E else "DOPO — registrazione MoIT subito"), "—"],
+         ("LATER — file MoIT early" if E else "DOPO — registrazione MoIT subito"), "$0 (Y4+)"],
     ], [150, 130, 80, 90, 65]))
     s.append(Spacer(1, 4))
     s.append(Paragraph(

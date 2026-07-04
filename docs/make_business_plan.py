@@ -254,13 +254,14 @@ def build(lang, filename):
 
     # 06 Competition
     sec("06", "Competitive Landscape" if E else "Panorama Competitivo")
+    yes, part, no = ("Yes", "Partial", "No") if E else ("Sì", "Parziale", "No")
     s.append(table([
         ["", ("Street-vendor language" if E else "Lingua da bancarella"), "Zalo-native",
          ("Explains & files" if E else "Spiega e dichiara"), ("Price fits hộ" if E else "Prezzo da hộ")],
-        ["MISA / KiotViet / Sapo", "—", "≈", "—", "≈"],
-        [("Tax agents (manual)" if E else "Đại lý thuế (manuale)"), "●", "≈", "●", "—"],
-        [("Excel / notebook" if E else "Excel / quaderno"), "●", "—", "—", "●"],
-        ["<b>Sổ Sạch</b>", "●", "●", "●", "●"],
+        ["MISA / KiotViet / Sapo", no, part, no, part],
+        [("Tax agents (manual)" if E else "Đại lý thuế (manuale)"), yes, part, yes, no],
+        [("Excel / notebook" if E else "Excel / quaderno"), yes, no, no, yes],
+        ["<b>Sổ Sạch</b>", f"<b>{yes}</b>", f"<b>{yes}</b>", f"<b>{yes}</b>", f"<b>{yes}</b>"],
     ], [105, 105, 80, 105, 90]))
     s.append(Spacer(1, 6))
     s.append(Paragraph(
