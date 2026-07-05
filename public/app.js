@@ -3,7 +3,13 @@
 //  Flusso: foto → /api/extract → conferma → /api/ledger → dashboard + tờ khai.
 // ============================================================================
 const $ = (s, r = document) => r.querySelector(s);
-const api = (u, opts) => fetch(u, opts).then((r) => r.json());
+// api(): allega il Bearer token quando l'utente è loggato — il server allora
+// usa il libro dell'account invece del libro demo (stessi endpoint).
+const api = (u, opts = {}) => {
+  const token = localStorage.getItem("ss_token");
+  if (token) opts.headers = { ...(opts.headers || {}), Authorization: "Bearer " + token };
+  return fetch(u, opts).then((r) => r.json());
+};
 const vnd = (n) => (Number(n) || 0).toLocaleString("vi-VN") + "đ";
 let LANG = localStorage.getItem("ss_lang") || "vi";
 let CONFIG = null;
@@ -217,7 +223,9 @@ async function openDeclaration() {
         <tr class="tot"><td>${T("d_tot")}</td><td>${vnd(d.total)}</td></tr>
       </table>
       ${d.exempt ? `<div class="conf-note">${d.exemptNote}</div>` : ""}
+      ${d.agent ? `<div class="conf-note">🧑‍💼 ${LANG === "vi" ? "Đại lý thuế của bạn" : "Your tax agent"}: <b>${d.agent.name}</b> (${d.agent.phone})</div>` : ""}
       <div class="disc">${d.disclaimer}</div>
+      <div class="share-foot">📒 ${LANG === "vi" ? "Tạo bởi" : "Made with"} <b>Sổ Sạch</b> — so-sach.onrender.com</div>
       <div style="display:flex;gap:9px;margin-top:14px">
         <button class="btn solid block" onclick="window.print()">${T("d_print")}</button>
         <button class="btn ghost block" id="dClose">${T("d_close")}</button>
@@ -279,6 +287,10 @@ async function init2() {
     .join("");
   sel.value = cur;
   refresh();
+  window.SS?.renderAcct?.();
 }
+
+// Espone gli helper condivisi ad account.js (auth, gói, đại lý thuế).
+window.SS = { api, refresh, toast, showModal, closeModal, vnd };
 
 init();

@@ -1,3 +1,4 @@
 node_modules/
-data/ledger.json
 .DS_Store
+*.log
+data/
