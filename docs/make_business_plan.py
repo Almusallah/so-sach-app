@@ -278,13 +278,24 @@ def build(lang, filename):
          "<b>Fase 1 (0–3 mesi):</b> pilota da 100 hộ in 2 distretti di HCMC via 3–5 đại lý thuế partner; "
          "200 volantini QR per strada di mercato; Zalo OA attivo."),
         ("<b>Phase 2 (3–9 mo):</b> quarterly-deadline campaigns (the product sells itself each filing "
-         "season); agent dashboard; e-invoice partner API." if E else
+         "season); agent dashboard; <b>Zalo Mini App</b> (zero-install, inside Zalo's 78M-user surface); "
+         "e-invoice partner API." if E else
          "<b>Fase 2 (3–9 mesi):</b> campagne sulle scadenze trimestrali (il prodotto si vende da solo a ogni "
-         "stagione di deposito); cruscotto agenti; API partner e-fattura."),
+         "stagione di deposito); cruscotto agenti; <b>Zalo Mini App</b> (zero installazioni, dentro i 78M "
+         "utenti di Zalo); API partner e-fattura."),
         ("<b>Phase 3 (9–18 mo):</b> southern provinces via agent network; MoMo/ZaloPay bundles; "
          "'verified compliant vendor' public profile as the marketing hook." if E else
          "<b>Fase 3 (9–18 mesi):</b> province del sud via rete agenti; bundle MoMo/ZaloPay; profilo "
          "pubblico 'venditore in regola verificato' come gancio di marketing."),
+        ("<b>Built-in viral loop:</b> every declaration, receipt confirmation and monthly summary a "
+         "household shares on Zalo carries the Sổ Sạch mark — each customer markets to their suppliers "
+         "and customers. Two segments, one product: street retail (segment B) needs the ledger; online "
+         "sellers (segment A, platform tax withheld at source) need the reconciliation and the refund "
+         "paperwork." if E else
+         "<b>Loop virale integrato:</b> ogni tờ khai, conferma di ricevuta e riepilogo mensile che un hộ "
+         "condivide su Zalo porta il marchio Sổ Sạch — ogni cliente fa marketing verso fornitori e clienti. "
+         "Due segmenti, un prodotto: retail di strada (segmento B) ha bisogno del libro; venditori online "
+         "(segmento A, ritenuta alla fonte dalle piattaforme) di riconciliazione e pratiche di rimborso."),
     ]))
 
     # 08 Financials
@@ -324,6 +335,12 @@ def build(lang, filename):
          "<b>Compratori strategici:</b> MISA, Citigo/KiotViet, Sapo (distribuzione nel segmento che gli "
          "manca), MoMo/ZaloPay (spinta sui servizi SME), la stessa VNG/Zalo. Comparabili SME-SaaS 4–6× ARR "
          "→ esito $6–10M alla scala Y3."),
+        ("<b>The data asset sharpens the exit:</b> a verified, longitudinal transaction ledger on tens of "
+         "thousands of micro-merchants is exactly the underwriting layer MoMo/VNPay/banks lack for merchant "
+         "cash advances and working-capital lending — strategic value beyond the subscription revenue." if E else
+         "<b>Il data asset affila l'exit:</b> un libro contabile verificato e longitudinale su decine di "
+         "migliaia di micro-esercenti è esattamente il layer di underwriting che manca a MoMo/VNPay/banche "
+         "per anticipi di cassa e credito al circolante — valore strategico oltre l'abbonamento."),
         ("<b>Kill criteria (honest):</b> if pilot week-4 retention <25% or agents won't resell at 30%, the "
          "wedge is wrong — pivot to agent-only tooling." if E else
          "<b>Criteri di stop (onesti):</b> se la retention alla settimana 4 del pilota è <25% o gli agenti "
