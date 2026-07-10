@@ -13,8 +13,8 @@ import {
 } from "./src/tax.js";
 import { extractReceipt, extractionMode } from "./src/extract.js";
 import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage } from "./src/zalo.js";
-import { initStore, storeMode, books, accounts, getBook, persistBook, persistAccount } from "./src/store.js";
-import { register, login, publicAccount, findAgentByCode, authOptional, requireAuth, normalizePhone } from "./src/auth.js";
+import { initStore, storeMode, books, accounts, getBook, persistBook, persistAccount, removeBook } from "./src/store.js";
+import { register, login, publicAccount, findAgentByCode, findAccountByZaloId, createLinkCode, consumeLinkCode, authOptional, requireAuth, normalizePhone } from "./src/auth.js";
 import { PLANS, payosEnabled, createPaymentLink, verifyPayosWebhook, activateSub, subActive } from "./src/billing.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -24,6 +24,25 @@ const DATA_DIR = join(__dirname, "data");
 
 // uid del libro: account autenticato → "u:<phone>"; altrimenti demo pubblico.
 const uidFor = (req) => (req.phone ? "u:" + req.phone : String(req.query.uid || "demo"));
+
+// Libro per un utente Zalo: se il suo zaloId è collegato a un account →
+// "u:<phone>" (visibile su web e all'đại lý thuế); altrimenti "zalo:<id>".
+const zaloBookUid = (zaloId) => {
+  const acct = findAccountByZaloId(zaloId);
+  return acct ? "u:" + acct.phone : "zalo:" + zaloId;
+};
+
+// Fonde il libro Zalo pre-collegamento nell'account e rimuove l'orfano.
+function mergeZaloBook(zaloId, phone) {
+  const src = books["zalo:" + zaloId];
+  if (!src || !src.entries?.length) return 0;
+  const dst = getBook("u:" + phone);
+  const n = src.entries.length;
+  dst.entries.push(...src.entries);
+  removeBook("zalo:" + zaloId);
+  persistBook("u:" + phone);
+  return n;
+}
 
 // ---- Zalo webhook (raw body PRIMA del json parser, per la firma) ---------------
 app.post("/webhooks/zalo", express.raw({ type: "*/*", limit: "1mb" }), async (req, res) => {
@@ -38,23 +57,38 @@ app.post("/webhooks/zalo", express.raw({ type: "*/*", limit: "1mb" }), async (re
     if (event.event_name === "user_send_image") {
       const url = event?.message?.attachments?.[0]?.payload?.url;
       if (url) {
+        const bookUid = zaloBookUid(uid); // account collegato o libro Zalo
         const { base64, mediaType } = await fetchImageBase64(url);
         const extracted = await extractReceipt(base64, mediaType);
-        const b = getBook("zalo:" + uid);
+        const b = getBook(bookUid);
         const entry = { id: "e" + Date.now(), ...extracted, source: "zalo", createdAt: new Date().toISOString() };
         b.entries.push(entry);
-        persistBook("zalo:" + uid);
+        persistBook(bookUid);
         await sendText(uid, formatEntryMessage(entry));
       }
     } else if (event.event_name === "user_send_text") {
-      const txt = (event?.message?.text || "").trim().toLowerCase();
-      const b = getBook("zalo:" + uid);
-      if (txt === "sổ" || txt === "so") {
+      const rawText = (event?.message?.text || "").trim();
+      const txt = rawText.toLowerCase();
+      // 1) È un codice di collegamento valido? → collega l'account e fondi il sổ.
+      const linkPhone = /^[A-Z0-9]{6}$/.test(rawText.toUpperCase())
+        ? consumeLinkCode(rawText, uid) : null;
+      if (linkPhone) {
+        const moved = mergeZaloBook(uid, linkPhone);
+        const acct = accounts[linkPhone];
+        await sendText(uid,
+          `✅ Đã kết nối với tài khoản ${acct?.name || linkPhone}.\n` +
+          (moved ? `Đã chuyển ${moved} bút toán từ Zalo vào sổ của bạn.\n` : "") +
+          `Từ giờ sổ trên Zalo và trên web là một — đại lý thuế cũng xem được.`);
+      } else if (txt === "sổ" || txt === "so") {
+        const b = getBook(zaloBookUid(uid));
         const now = new Date();
         const t = totals(b.entries, { year: now.getFullYear() });
         await sendText(uid, `📒 Sổ năm ${now.getFullYear()}:\nThu: ${t.revenue.toLocaleString("vi-VN")}đ\nChi: ${t.expenses.toLocaleString("vi-VN")}đ\nLãi gộp: ${t.net.toLocaleString("vi-VN")}đ`);
       } else {
-        await sendText(uid, "Chào bạn! Chụp ảnh hoá đơn gửi vào đây, Sổ Sạch sẽ ghi sổ giúp bạn. Gõ \"sổ\" để xem tổng kết.");
+        const linked = !!findAccountByZaloId(uid);
+        await sendText(uid,
+          "Chào bạn! Chụp ảnh hoá đơn gửi vào đây, Sổ Sạch sẽ ghi sổ giúp bạn. Gõ \"sổ\" để xem tổng kết." +
+          (linked ? "" : "\n\n💡 Có tài khoản trên web? Vào phần Tài khoản → \"Lấy mã kết nối Zalo\" rồi gửi mã vào đây để gộp sổ và cho đại lý thuế xem giúp."));
       }
     }
   } catch (e) { console.error("zalo webhook:", e.message); }
@@ -96,6 +130,11 @@ app.post("/api/auth/login", (req, res) => {
 
 app.get("/api/auth/me", (req, res) =>
   res.json({ ok: true, account: publicAccount(req.account), subActive: subActive(req.account) }));
+
+// Utente web → genera un codice da inviare all'OA Sổ Sạch su Zalo per collegare
+// il proprio zaloId all'account (poi il sổ Zalo si fonde qui).
+app.post("/api/link/zalo-code", requireAuth, (req, res) =>
+  res.json({ ok: true, code: createLinkCode(req.phone), expiresInMinutes: 15 }));
 
 // hộ → collega il proprio đại lý thuế con il codice invito
 app.post("/api/link-agent", requireAuth, (req, res) => {

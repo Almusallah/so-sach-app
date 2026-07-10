@@ -88,11 +88,46 @@ function generateAgentCode() {
   return code;
 }
 
+// ---- Zalo linking -----------------------------------------------------------
+//  Un utente web (telefono+PIN) genera un codice, lo invia all'OA Sổ Sạch su
+//  Zalo, e il bot collega il suo zaloId all'account → il sổ su Zalo e sul web
+//  diventano lo stesso libro (e l'đại lý thuế lo vede). Codici effimeri, 15 min.
+const linkCodes = new Map(); // code -> { phone, exp }
+const LINK_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // niente O/0/I/1 ambigui
+
+export function createLinkCode(phone) {
+  const now = Date.now();
+  for (const [c, r] of linkCodes) if (r.exp < now) linkCodes.delete(c); // purge
+  let code;
+  do { code = Array.from({ length: 6 }, () => LINK_ALPHABET[crypto.randomInt(LINK_ALPHABET.length)]).join(""); }
+  while (linkCodes.has(code));
+  linkCodes.set(code, { phone, exp: now + 15 * 60 * 1000 });
+  return code;
+}
+
+// Consuma un codice per un dato zaloId. Ritorna il telefono collegato o null.
+export function consumeLinkCode(code, zaloId) {
+  const rec = linkCodes.get(String(code || "").trim().toUpperCase());
+  if (!rec || Date.now() > rec.exp) return null;
+  linkCodes.delete(String(code).trim().toUpperCase());
+  const acct = accounts[rec.phone];
+  if (!acct) return null;
+  acct.zaloId = zaloId;
+  persistAccount(rec.phone);
+  return rec.phone;
+}
+
+export function findAccountByZaloId(zaloId) {
+  if (!zaloId) return null;
+  return Object.values(accounts).find((a) => a.zaloId === zaloId) || null;
+}
+
 // Vista pubblica dell'account (mai pinHash/salt fuori).
 export function publicAccount(acct) {
   if (!acct) return null;
   const { phone, role, name, agentCode, agentPhone, sub, createdAt } = acct;
-  return { phone, role, name, agentCode: agentCode || null, agentPhone: agentPhone || null, sub, createdAt };
+  return { phone, role, name, agentCode: agentCode || null, agentPhone: agentPhone || null,
+           zaloLinked: !!acct.zaloId, sub, createdAt };
 }
 
 // Middleware: popola req.phone / req.account se il Bearer token è valido.

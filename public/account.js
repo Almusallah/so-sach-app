@@ -111,6 +111,12 @@
              <div class="field" style="margin-top:10px"><label>${t("Mã đại lý thuế của bạn", "Your tax agent's code")}</label>
                <div style="display:flex;gap:8px"><input id="linkCode" placeholder="DL1234" style="flex:1"/><button class="btn ghost" id="linkGo">${t("Kết nối", "Link")}</button></div>
                ${ME.agentPhone ? `<small>${t("Đang kết nối với đại lý", "Linked to agent")}: ${ME.agentPhone}</small>` : ""}
+             </div>
+             <div class="field" style="margin-top:10px"><label>💬 ${t("Kết nối Zalo", "Connect Zalo")}</label>
+               ${ME.zaloLinked
+                 ? `<div class="conf-note">✅ ${t("Đã kết nối Zalo — sổ trên Zalo và web là một.", "Zalo linked — your Zalo and web ledger are one.")}</div>`
+                 : `<button class="btn ghost block" id="zaloLinkBtn">${t("Lấy mã kết nối Zalo", "Get Zalo link code")}</button>
+                    <small>${t("Để gửi hoá đơn qua Zalo mà sổ vẫn về tài khoản này (và đại lý thuế xem được).", "So receipts you send on Zalo land in this account (and your tax agent can see them).")}</small>`}
              </div>`}
         <div style="display:flex;gap:9px;margin-top:14px">
           <a class="btn ghost block" href="/api/export.csv" onclick="this.href='/api/export.csv'" id="csvBtn">📥 ${t("Xuất Excel (CSV)", "Export Excel (CSV)")}</a>
@@ -128,6 +134,19 @@
       const r = await api("/api/link-agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: $("#linkCode").value }) });
       if (r.ok) { toast(t("✅ Đã kết nối với đại lý " + r.agent.name, "✅ Linked to " + r.agent.name)); closeModal(); renderAcct(); }
       else toast("❌ " + (r.error || "error"));
+    });
+    $("#zaloLinkBtn")?.addEventListener("click", async () => {
+      const r = await api("/api/link/zalo-code", { method: "POST" });
+      if (!r.ok) return toast("❌ " + (r.error || "error"));
+      showModal(`
+        <div class="modal-head">💬 ${t("Kết nối Zalo", "Connect Zalo")}</div>
+        <div class="modal-body">
+          <div class="conf-note">${t("Mở OA <b>Sổ Sạch</b> trên Zalo và gửi mã này vào khung chat:", "Open the <b>Sổ Sạch</b> OA on Zalo and send this code in the chat:")}</div>
+          <div style="font-size:2.1rem;font-weight:800;letter-spacing:6px;text-align:center;margin:16px 0;color:#0b3d2e;font-family:monospace">${r.code}</div>
+          <div class="disc">${t("Mã có hiệu lực 15 phút. Sau khi gửi, mọi hoá đơn bạn chụp trên Zalo sẽ về đúng tài khoản này.", "Code valid 15 minutes. After you send it, every receipt you snap on Zalo lands in this account.")}</div>
+          <button class="btn solid block" id="zDone" style="margin-top:12px">${t("Xong", "Done")}</button>
+        </div>`);
+      $("#zDone").addEventListener("click", () => { closeModal(); renderAcct(); });
     });
     // CSV con token: fetch + blob (l'header Authorization non passa nei link)
     $("#csvBtn").addEventListener("click", async (e) => {

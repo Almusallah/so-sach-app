@@ -78,3 +78,13 @@ export function getBook(uid) {
   if (!books[uid]) books[uid] = { profile: { name: "", category: "services_goods", revenueEstimate: 0 }, entries: [] };
   return books[uid];
 }
+
+// Rimuove un libro (usato quando un libro Zalo viene fuso in un account).
+export function removeBook(uid) {
+  delete books[uid];
+  if (mode === "postgres" && pool) {
+    pool.query("DELETE FROM docs WHERE kind='book' AND key=$1", [uid]).catch((e) => console.error("removeBook:", e.message));
+  } else if (mode === "json") {
+    writeFileSync(FILE_BOOKS(), JSON.stringify(books, null, 2));
+  }
+}
