@@ -63,7 +63,7 @@ const I18N = {
   card_thu: { vi: "Thu năm nay", en: "Income YTD" },
   card_chi: { vi: "Chi năm nay", en: "Expenses YTD" },
   card_lai: { vi: "Lãi gộp", en: "Gross profit" },
-  bar_taxfree: { vi: "Ngưỡng chịu thuế (500 triệu)", en: "Taxable threshold (500M)" },
+  bar_taxfree: { vi: "Ngưỡng chịu thuế (1 tỷ)", en: "Taxable threshold (1B)" },
   bar_einv: { vi: "Ngưỡng e-invoice máy tính tiền (1 tỷ)", en: "Cash-register e-invoice threshold (1B)" },
   proj: { vi: "dự kiến cả năm", en: "projected/yr" },
   tax_exempt: { vi: "✅ Doanh thu dự kiến dưới ngưỡng — quý này KHÔNG phải nộp thuế, nhưng vẫn nộp tờ khai.", en: "✅ Projected revenue below threshold — NO tax due this quarter, but you still file the declaration." },

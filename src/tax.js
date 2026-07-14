@@ -7,8 +7,10 @@
 
 // Soglie 2026 (VND / anno) — configurabili via env per aggiornamenti rapidi.
 export const THRESHOLDS = {
-  // Sotto questa soglia di ricavi annui: esente VAT/PIT (riforma 2026).
-  taxFree: Number(process.env.TAX_FREE_THRESHOLD || 500_000_000),
+  // Sotto questa soglia di ricavi annui: esente VAT/PIT. Innalzata da 500M a
+  // 1 miliardo dal 01/01/2026 (Decreto 141/2026/NĐ-CP, modifica il 68/2026).
+  // Da validare con un đại lý thuế; override rapido via TAX_FREE_THRESHOLD.
+  taxFree: Number(process.env.TAX_FREE_THRESHOLD || 1_000_000_000),
   // Da questa soglia: obbligo e-invoice da registratore di cassa (Decreto 70/2025).
   eInvoice: Number(process.env.EINVOICE_THRESHOLD || 1_000_000_000),
 };
