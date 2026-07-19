@@ -1,16 +1,30 @@
 // ============================================================================
 //  Sổ Sạch — frontend (VI primario, EN toggle).
 //  Flusso: foto → /api/extract → conferma → /api/ledger → dashboard + tờ khai.
+//  Dashboard: card → Điểm Sổ Sạch (credit-readiness) → soglie → grafico 12 mesi.
 // ============================================================================
 const $ = (s, r = document) => r.querySelector(s);
+
+// Sandbox anonima PRIVATA per visitatore (prima tutti condividevano uid=demo).
+const ANON = localStorage.getItem("ss_anon") ||
+  (() => { const v = "w" + Math.random().toString(36).slice(2, 12); localStorage.setItem("ss_anon", v); return v; })();
+const Q = "?uid=" + ANON;
+
 // api(): allega il Bearer token quando l'utente è loggato — il server allora
-// usa il libro dell'account invece del libro demo (stessi endpoint).
+// usa il libro dell'account invece della sandbox anonima (stessi endpoint).
 const api = (u, opts = {}) => {
   const token = localStorage.getItem("ss_token");
   if (token) opts.headers = { ...(opts.headers || {}), Authorization: "Bearer " + token };
   return fetch(u, opts).then((r) => r.json());
 };
 const vnd = (n) => (Number(n) || 0).toLocaleString("vi-VN") + "đ";
+// Formato compatto per numeri grandi (barre/etichette): 1,2 tỷ · 850 triệu.
+const vndShort = (n) => {
+  n = Number(n) || 0;
+  if (n >= 1e9) return (n / 1e9).toLocaleString("vi-VN", { maximumFractionDigits: 2 }) + " tỷ";
+  if (n >= 1e6) return Math.round(n / 1e6).toLocaleString("vi-VN") + " triệu";
+  return vnd(n);
+};
 let LANG = localStorage.getItem("ss_lang") || "vi";
 let CONFIG = null;
 let manualType = "thu";
@@ -59,6 +73,7 @@ const I18N = {
   zb_p: { vi: "Không app mới, không mật khẩu mới. Kết bạn với OA Sổ Sạch, gửi ảnh hoá đơn là xong. Bản OA đang mở cho 100 hộ đầu tiên tại TP.HCM.", en: "No new app, no new password. Follow the Sổ Sạch OA, send receipt photos, done. The OA is opening to the first 100 households in HCMC." },
   zb_btn: { vi: "Đăng ký 100 hộ đầu tiên", en: "Join the first 100" },
   foot: { vi: "© 2026 Sổ Sạch — bản dùng thử. Số liệu thuế là ước tính, kiểm tra với đại lý thuế trước khi nộp.", en: "© 2026 Sổ Sạch — demo. Tax figures are estimates; verify with a licensed tax agent before filing." },
+  foot_co: { vi: "Một sản phẩm của CÔNG TY TNHH OFFICINE GẶP — TP. Hồ Chí Minh", en: "A product of OFFICINE GAP CO., LTD — Ho Chi Minh City" },
   // dinamiche
   card_thu: { vi: "Thu năm nay", en: "Income YTD" },
   card_chi: { vi: "Chi năm nay", en: "Expenses YTD" },
@@ -76,8 +91,28 @@ const I18N = {
   cancel: { vi: "Huỷ", en: "Cancel" },
   saved: { vi: "✅ Đã ghi vào sổ", en: "✅ Recorded" },
   deleted: { vi: "Đã xoá", en: "Deleted" },
+  reading: { vi: "⏳ AI đang đọc ảnh…", en: "⏳ AI is reading…" },
   th_date: { vi: "Ngày", en: "Date" }, th_what: { vi: "Nội dung", en: "Item" }, th_amt: { vi: "Số tiền", en: "Amount" },
   empty_ledger: { vi: "Chưa có gì trong sổ — chụp hoá đơn đầu tiên đi! 📷", en: "Ledger is empty — snap your first receipt! 📷" },
+  sample_btn: { vi: "📚 Xem thử với sổ mẫu 4 tháng", en: "📚 Load a 4-month sample book" },
+  sample_hint: { vi: "Chưa muốn nhập số thật? Nạp sổ mẫu của một quán bún bò để xem điểm, biểu đồ và tờ khai hoạt động.", en: "Not ready for real numbers? Load a noodle-shop sample book to see the score, chart and declaration in action." },
+  sample_clear: { vi: "Xoá sổ mẫu", en: "Clear sample" },
+  sample_loaded: { vi: "✅ Đã nạp sổ mẫu — xem điểm và biểu đồ!", en: "✅ Sample loaded — check the score and chart!" },
+  sample_cleared: { vi: "Đã xoá sổ mẫu", en: "Sample cleared" },
+  sample_tag: { vi: "sổ mẫu", en: "sample" },
+  del_arm: { vi: "Chạm lần nữa để xoá", en: "Tap again to delete" },
+  more_entries: { vi: "… còn {n} bút toán cũ hơn — xuất CSV để xem tất cả", en: "… {n} older entries — export CSV to see all" },
+  // Điểm Sổ Sạch
+  score_title: { vi: "Điểm Sổ Sạch", en: "Sổ Sạch Score" },
+  score_sub: { vi: "Sổ càng sạch — càng dễ vay vốn", en: "Cleaner books — easier credit" },
+  grade_A: { vi: "Hồ sơ đẹp, sẵn sàng vay vốn 🏦", en: "Loan-ready books 🏦" },
+  grade_B: { vi: "Sổ tốt — gần đạt chuẩn", en: "Good books — nearly there" },
+  grade_C: { vi: "Khá — cần đều tay hơn", en: "Fair — needs regularity" },
+  grade_D: { vi: "Mới bắt đầu — cứ ghi tiếp!", en: "Just starting — keep going!" },
+  score_note: { vi: "Ngân hàng và quỹ tín dụng nhìn vào nề nếp sổ sách khi xét vay. Điểm này đo mức độ \"sẵn sàng hồ sơ\" của sổ — không phải điểm tín dụng chính thức.", en: "Banks and credit funds look at bookkeeping discipline when assessing loans. This measures how loan-ready your books are — not an official credit score." },
+  chart_title: { vi: "📈 Dòng tiền 12 tháng", en: "📈 12-month cash flow" },
+  leg_thu: { vi: "Thu", en: "In" },
+  leg_chi: { vi: "Chi", en: "Out" },
   decl_title: { vi: "Tờ khai thuế quý — BẢN NHÁP", en: "Quarterly tax declaration — DRAFT" },
   d_period: { vi: "Kỳ tính thuế", en: "Tax period" },
   d_taxpayer: { vi: "Người nộp thuế", en: "Taxpayer" },
@@ -94,6 +129,7 @@ const T = (k, vars) => {
   if (vars) for (const [key, v] of Object.entries(vars)) s = s.replace(`{${key}}`, v);
   return s;
 };
+const MONTHS = { vi: ["T1","T2","T3","T4","T5","T6","T7","T8","T9","T10","T11","T12"], en: ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"] };
 
 function applyI18n() {
   document.documentElement.lang = LANG;
@@ -111,9 +147,74 @@ function toast(msg) {
 function showModal(html) { $("#modal").innerHTML = html; $("#modalBg").classList.add("open"); }
 function closeModal() { $("#modalBg").classList.remove("open"); }
 
+// ---- Điểm Sổ Sạch (ring + componenti) --------------------------------------------
+function renderScore(sc) {
+  const C = 2 * Math.PI * 34; // circonferenza ring r=34
+  const off = C * (1 - sc.score / 100);
+  // il consiglio: la componente più debole
+  const weakest = [...sc.parts].sort((a, b) => a.points / a.max - b.points / b.max)[0];
+  $("#scoreBox").innerHTML = `
+    <div class="score-head"><b>💎 ${T("score_title")}</b><span>${T("score_sub")}</span></div>
+    <div class="score-wrap">
+      <svg class="ring g${sc.grade}" viewBox="0 0 84 84" role="img" aria-label="${sc.score}/100">
+        <circle class="ring-bg" cx="42" cy="42" r="34"/>
+        <circle class="ring-fg" cx="42" cy="42" r="34" stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"/>
+        <text x="42" y="44" class="ring-num">${sc.score}</text>
+        <text x="42" y="60" class="ring-grade">${sc.grade}</text>
+      </svg>
+      <div class="score-side">
+        <div class="score-grade-label">${T("grade_" + sc.grade)}</div>
+        ${sc.parts.map((p) => `
+          <div class="sp-row" title="${LANG === "vi" ? p.tip_vi : p.tip_en}">
+            <span>${LANG === "vi" ? p.vi : p.en}</span>
+            <div class="sp-bar"><i style="width:${(p.points / p.max * 100).toFixed(0)}%"></i></div>
+            <em>${p.points}/${p.max}</em>
+          </div>`).join("")}
+      </div>
+    </div>
+    ${sc.score < 100 ? `<div class="score-tip">💡 ${LANG === "vi" ? weakest.tip_vi : weakest.tip_en}</div>` : ""}
+    <div class="score-note">${T("score_note")}</div>`;
+}
+
+// ---- Grafico cash-flow 12 mesi (SVG inline, zero dipendenze) ----------------------
+function renderChart(monthly) {
+  const hasData = monthly.some((m) => m.thu || m.chi);
+  const box = $("#chartBox");
+  if (!hasData) { box.innerHTML = ""; box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  const max = Math.max(...monthly.flatMap((m) => [m.thu, m.chi]));
+  const H = 128, base = H - 22, scale = (H - 38) / max;
+  const bars = monthly.map((m, i) => {
+    const gx = 8 + i * 30.5;
+    const ht = Math.max(m.thu ? 2 : 0, m.thu * scale), hc = Math.max(m.chi ? 2 : 0, m.chi * scale);
+    return `
+      <rect class="b-thu" x="${gx}" y="${(base - ht).toFixed(1)}" width="9" height="${ht.toFixed(1)}" rx="2"><title>${MONTHS[LANG][i]} · ${T("leg_thu")}: ${vnd(m.thu)}</title></rect>
+      <rect class="b-chi" x="${gx + 11}" y="${(base - hc).toFixed(1)}" width="9" height="${hc.toFixed(1)}" rx="2"><title>${MONTHS[LANG][i]} · ${T("leg_chi")}: ${vnd(m.chi)}</title></rect>
+      <text x="${gx + 10}" y="${H - 8}" class="b-lbl">${MONTHS[LANG][i]}</text>`;
+  }).join("");
+  box.innerHTML = `
+    <div class="chart-head"><b>${T("chart_title")}</b>
+      <span class="legend"><i class="dot thu"></i>${T("leg_thu")} <i class="dot chi"></i>${T("leg_chi")}</span></div>
+    <svg viewBox="0 0 378 ${H}" class="chart">
+      <line x1="4" y1="${base}" x2="374" y2="${base}" class="axis"/>
+      ${bars}
+    </svg>`;
+}
+
+// ---- Sổ mẫu -----------------------------------------------------------------------
+async function seedSample() {
+  toast("⏳ …");
+  const r = await api("/api/demo-seed" + Q, { method: "POST" });
+  if (r.ok) { toast(T("sample_loaded")); refresh(); } else toast("❌ " + (r.error || ""));
+}
+async function clearSample() {
+  const r = await api("/api/demo-seed" + Q, { method: "DELETE" });
+  if (r.ok) { toast(T("sample_cleared")); refresh(); }
+}
+
 // ---- Dashboard -----------------------------------------------------------------
 async function refresh() {
-  const d = await api("/api/ledger?uid=demo");
+  const d = await api("/api/ledger" + Q);
   // profilo
   if ($("#bizName") !== document.activeElement) $("#bizName").value = d.profile.name || "";
   $("#category").value = d.profile.category;
@@ -123,10 +224,13 @@ async function refresh() {
     <div class="card chi"><b>${vnd(d.year.expenses)}</b><span>${T("card_chi")}</span></div>
     <div class="card"><b>${vnd(d.year.net)}</b><span>${T("card_lai")}</span></div>`;
 
+  renderScore(d.score);
+  renderChart(d.monthly);
+
   const th = d.thresholds;
   $("#bars").innerHTML = `
     <div class="bar-row">
-      <label><span>${T("bar_taxfree")}</span><span>${vnd(th.projection)} ${T("proj")}</span></label>
+      <label><span>${T("bar_taxfree")}</span><span>${vndShort(th.projection)} ${T("proj")}</span></label>
       <div class="bar ${th.taxFree.pct > .8 ? "warn" : ""}"><i style="width:${(th.taxFree.pct * 100).toFixed(1)}%"></i></div>
     </div>
     <div class="bar-row">
@@ -139,22 +243,40 @@ async function refresh() {
     : `${T("tax_due")} (${d.quarter.label}): <b>${vnd(d.tax.total)}</b><br/>GTGT ${vnd(d.tax.vat)} + TNCN ${vnd(d.tax.pit)} · ${T("deadline")}: <b>${d.deadline.deadline}</b>`;
 
   // libro
+  const hasSample = d.entries.some((e) => e.sample);
+  const loggedOut = !localStorage.getItem("ss_token");
   if (!d.entries.length) {
-    $("#ledger").innerHTML = `<div class="empty">${T("empty_ledger")}</div>`;
+    $("#ledger").innerHTML = `<div class="empty">
+      <div class="empty-ico">📒</div>
+      <p>${T("empty_ledger")}</p>
+      ${loggedOut ? `<button class="btn solid" id="seedBtn">${T("sample_btn")}</button>
+      <small>${T("sample_hint")}</small>` : ""}
+    </div>`;
+    $("#seedBtn")?.addEventListener("click", seedSample);
   } else {
-    $("#ledger").innerHTML = `<table>
+    $("#ledger").innerHTML = `
+      ${hasSample ? `<div class="sample-strip">📚 ${T("sample_hint").split("?")[0]}? <button class="chip-btn" id="clearSampleBtn">🧹 ${T("sample_clear")}</button></div>` : ""}
+      <table>
       <tr><th>${T("th_date")}</th><th>${T("th_what")}</th><th style="text-align:right">${T("th_amt")}</th><th></th></tr>
-      ${d.entries.map((e) => `
+      ${d.entries.slice(0, 40).map((e) => `
         <tr class="${e.type}">
-          <td>${e.date}<div class="src">${e.source === "zalo" ? "💬 Zalo" : "🌐 web"}${e.engine === "demo" ? " · demo" : ""}</div></td>
+          <td>${e.date}<div class="src">${e.source === "zalo" ? "💬 Zalo" : "🌐 web"}${e.engine === "demo" ? " · demo" : ""}${e.sample ? ` · ${T("sample_tag")}` : ""}</div></td>
           <td>${e.counterparty || ""}<div class="src">${e.description || ""}</div></td>
           <td class="amt">${e.type === "thu" ? "+" : "−"}${vnd(e.amount)}</td>
-          <td><button class="del" data-del="${e.id}">🗑</button></td>
+          <td><button class="del" data-del="${e.id}" title="${T("del_arm")}">🗑</button></td>
         </tr>`).join("")}
-    </table>`;
+    </table>
+    ${d.entries.length > 40 ? `<div class="src" style="padding:10px;text-align:center">${T("more_entries", { n: d.entries.length - 40 })}</div>` : ""}`;
+    $("#clearSampleBtn")?.addEventListener("click", clearSample);
+    // eliminazione in due tocchi (niente cancellazioni accidentali)
     $("#ledger").querySelectorAll("[data-del]").forEach((b) =>
       b.addEventListener("click", async () => {
-        await api(`/api/ledger/${b.dataset.del}?uid=demo`, { method: "DELETE" });
+        if (!b.dataset.armed) {
+          b.dataset.armed = "1"; b.textContent = "❓"; b.classList.add("arm");
+          setTimeout(() => { b.dataset.armed = ""; b.textContent = "🗑"; b.classList.remove("arm"); }, 2600);
+          return;
+        }
+        await api(`/api/ledger/${b.dataset.del}${Q}`, { method: "DELETE" });
         toast(T("deleted")); refresh();
       })
     );
@@ -167,7 +289,7 @@ async function handleFile(file) {
   let bin = ""; const bytes = new Uint8Array(buf);
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
   const base64 = btoa(bin);
-  toast("⏳ …");
+  toast(T("reading"));
   const r = await api("/api/extract", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ image: base64, mediaType: file.type || "image/jpeg" }),
@@ -200,14 +322,14 @@ function confirmEntry(x) {
       amount: Number(String($("#cAmount").value).replace(/[^\d]/g, "")),
       counterparty: $("#cWho").value, description: $("#cDesc").value, date: $("#cDate").value,
     };
-    const r = await api("/api/ledger?uid=demo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const r = await api("/api/ledger" + Q, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (r.ok) { closeModal(); toast(T("saved")); refresh(); }
   });
 }
 
 // ---- Tờ khai --------------------------------------------------------------------
 async function openDeclaration() {
-  const d = await api("/api/declaration?uid=demo");
+  const d = await api("/api/declaration" + Q);
   const pr = (n) => (n * 100).toFixed(1).replace(".0", "");
   showModal(`
     <div class="modal-head">${T("decl_title")}</div>
@@ -243,11 +365,12 @@ async function init() {
     .map(([k, c]) => `<option value="${k}">${LANG === "vi" ? c.vi : c.en} (${(c.vat * 100).toFixed(0)}%+${(c.pit * 100).toFixed(1)}%)</option>`)
     .join("");
   sel.addEventListener("change", async () => {
-    await api("/api/profile?uid=demo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ category: sel.value }) });
+    await api("/api/profile" + Q, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ category: sel.value }) });
     refresh();
   });
   $("#bizName").addEventListener("change", async () => {
-    await api("/api/profile?uid=demo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: $("#bizName").value }) });
+    await api("/api/profile" + Q, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: $("#bizName").value }) });
+    refresh();
   });
   $("#drop").addEventListener("click", () => $("#file").click());
   $("#file").addEventListener("change", (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ""; });
@@ -266,7 +389,7 @@ async function init() {
       date: $("#mDate").value || undefined,
     };
     if (!body.amount) return;
-    const r = await api("/api/ledger?uid=demo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const r = await api("/api/ledger" + Q, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (r.ok) { $("#manualForm").reset(); toast(T("saved")); refresh(); }
   });
   $("#declBtn").addEventListener("click", openDeclaration);

@@ -16,6 +16,8 @@ import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMess
 import { initStore, storeMode, books, accounts, getBook, persistBook, persistAccount, removeBook } from "./src/store.js";
 import { register, login, publicAccount, findAgentByCode, findAccountByZaloId, createLinkCode, consumeLinkCode, authOptional, requireAuth, normalizePhone } from "./src/auth.js";
 import { PLANS, payosEnabled, createPaymentLink, verifyPayosWebhook, activateSub, subActive } from "./src/billing.js";
+import { sosachScore } from "./src/score.js";
+import { sampleEntries, SAMPLE_PROFILE } from "./src/sample.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -194,14 +196,22 @@ function ledgerPayload(uid) {
   const tYear = totals(b.entries, { year });
   const tQuarter = totals(b.entries, { year, q });
   const projection = projectAnnual(tYear.revenue, now);
+  // Serie mensile per il grafico cash-flow (anno corrente).
+  const monthly = Array.from({ length: 12 }, () => ({ thu: 0, chi: 0 }));
+  for (const e of b.entries) {
+    const d = new Date(e.date);
+    if (d.getFullYear() === year) monthly[d.getMonth()][e.type === "thu" ? "thu" : "chi"] += e.amount;
+  }
   return {
     profile: b.profile,
     entries: [...b.entries].sort((a, z) => z.date.localeCompare(a.date)).slice(0, 500),
     year: { ...tYear, label: String(year) },
     quarter: { ...tQuarter, label: `Q${q}/${year}` },
+    monthly,
     thresholds: thresholdStatus(projection),
     tax: quarterlyTax(tQuarter.revenue, b.profile.category, projection),
     deadline: nextDeadline(now),
+    score: sosachScore(b, now),
   };
 }
 
@@ -244,6 +254,26 @@ app.post("/api/profile", (req, res) => {
   if (revenueEstimate !== undefined) b.profile.revenueEstimate = Math.max(0, Number(revenueEstimate) || 0);
   persistBook(uid);
   res.json({ ok: true, profile: b.profile });
+});
+
+// ---- Sổ mẫu (demo per utenti/investitori — solo sandbox anonime) ------------------
+app.post("/api/demo-seed", (req, res) => {
+  if (req.phone) return res.status(403).json({ error: "Sổ mẫu chỉ dành cho bản dùng thử (chưa đăng nhập)." });
+  const b = getBook(uidFor(req));
+  b.entries = b.entries.filter((e) => !e.sample); // niente doppioni se ritappato
+  b.entries.push(...sampleEntries());
+  if (!b.profile.name) Object.assign(b.profile, SAMPLE_PROFILE);
+  persistBook(uidFor(req));
+  res.json({ ok: true, added: b.entries.filter((e) => e.sample).length });
+});
+
+app.delete("/api/demo-seed", (req, res) => {
+  const b = getBook(uidFor(req));
+  const before = b.entries.length;
+  b.entries = b.entries.filter((e) => !e.sample);
+  if (b.profile.name === SAMPLE_PROFILE.name) b.profile.name = "";
+  persistBook(uidFor(req));
+  res.json({ ok: true, removed: before - b.entries.length });
 });
 
 // ---- Export CSV (BOM per Excel, apre pulito con dấu tiếng Việt) -------------------

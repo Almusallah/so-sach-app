@@ -1,13 +1,15 @@
 {
   "name": "Sổ Sạch — Sổ sách kế toán AI cho hộ kinh doanh",
   "short_name": "Sổ Sạch",
-  "description": "Chụp hoá đơn → sổ thu chi → tờ khai thuế soạn sẵn.",
+  "description": "Chụp hoá đơn → sổ thu chi → Điểm Sổ Sạch → tờ khai thuế soạn sẵn.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f6f8f7",
+  "background_color": "#f9f7f1",
   "theme_color": "#0b3d2e",
   "lang": "vi",
   "icons": [
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }
