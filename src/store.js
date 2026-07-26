@@ -11,6 +11,10 @@ import { join } from "node:path";
 
 export const books = {};
 export const accounts = {};
+// Lista d'attesa pilota (hộ kinh doanh + đại lý thuế), chiave = telefono
+// normalizzato. Vive nello stesso store dei libri: su Render è Postgres, quindi
+// i lead sopravvivono ai redeploy — sono la pipeline del pilota, non cache.
+export const leads = {};
 
 let mode = "json";
 let pool = null;
@@ -18,6 +22,7 @@ let DATA_DIR = null;
 
 const FILE_BOOKS = () => join(DATA_DIR, "ledger.json");
 const FILE_ACCTS = () => join(DATA_DIR, "accounts.json");
+const FILE_LEADS = () => join(DATA_DIR, "leads.json");
 
 export async function initStore(dataDir) {
   DATA_DIR = dataDir;
@@ -38,6 +43,7 @@ export async function initStore(dataDir) {
       for (const row of r.rows) {
         if (row.kind === "book") books[row.key] = row.doc;
         else if (row.kind === "account") accounts[row.key] = row.doc;
+        else if (row.kind === "lead") leads[row.key] = row.doc;
       }
       mode = "postgres";
       return mode;
@@ -48,6 +54,7 @@ export async function initStore(dataDir) {
 
   if (existsSync(FILE_BOOKS())) { try { Object.assign(books, JSON.parse(readFileSync(FILE_BOOKS(), "utf8"))); } catch {} }
   if (existsSync(FILE_ACCTS())) { try { Object.assign(accounts, JSON.parse(readFileSync(FILE_ACCTS(), "utf8"))); } catch {} }
+  if (existsSync(FILE_LEADS())) { try { Object.assign(leads, JSON.parse(readFileSync(FILE_LEADS(), "utf8"))); } catch {} }
   mode = "json";
   return mode;
 }
@@ -72,6 +79,10 @@ export function persistBook(uid) {
 export function persistAccount(phone) {
   if (mode === "json") writeFileSync(FILE_ACCTS(), JSON.stringify(accounts, null, 2));
   else upsert("account", phone, accounts[phone]).catch((e) => console.error("persistAccount:", e.message));
+}
+export function persistLead(phone) {
+  if (mode === "json") writeFileSync(FILE_LEADS(), JSON.stringify(leads, null, 2));
+  else upsert("lead", phone, leads[phone]).catch((e) => console.error("persistLead:", e.message));
 }
 
 export function getBook(uid) {

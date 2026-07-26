@@ -190,6 +190,38 @@ section { margin-top: 56px; }
 .chip-btn { border: 1px solid var(--bordo); background: #fff; border-radius: 999px; padding: 4px 12px; font-size: 12px; font-weight: 700; color: var(--testo); }
 .chip-btn:hover { border-color: var(--rosso); color: var(--rosso); }
 
+/* ---- Bảng đại lý thuế (kênh phân phối) ---- */
+.ag-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.ag-head b { font-size: 16px; color: var(--giada-ink); }
+.ag-head span { display: block; font-size: 12px; color: var(--grigio); margin-top: 2px; }
+.ag-stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 9px; margin-bottom: 14px; }
+.ag-stats > div { border: 1px solid var(--bordo); border-radius: 12px; padding: 11px 8px; text-align: center; background: linear-gradient(180deg, #fff, #fdfcf8); }
+.ag-stats b { display: block; font-size: clamp(13px, 1.3vw, 17px); font-weight: 800; color: var(--giada-ink); white-space: nowrap; }
+.ag-stats span { font-size: 10.5px; color: var(--grigio); font-weight: 600; line-height: 1.3; display: block; margin-top: 2px; }
+.ag-stats em { font-style: normal; color: var(--giada); font-weight: 700; }
+
+.ag-credit { border: 1px solid #cfe3da; border-radius: 14px; padding: 13px 15px; margin-bottom: 14px;
+  background: linear-gradient(150deg, #f4faf7 0%, #f6f3e8 100%); }
+.ag-credit-h b { font-size: 14px; color: var(--giada-ink); }
+.ag-credit p { margin: 9px 0 0; font-size: 12px; color: #57614f; line-height: 1.55; }
+.ag-dist { display: flex; gap: 3px; margin-top: 9px; height: 22px; }
+.ag-dist i { display: grid; place-items: center; font-style: normal; font-size: 11px; font-weight: 800;
+  color: #fff; border-radius: 5px; min-width: 22px; }
+.ag-dist .gA { background: var(--giada); }
+.ag-dist .gB { background: #7aa93c; }
+.ag-dist .gC { background: var(--oro); color: var(--giada-ink); }
+.ag-dist .gD { background: var(--rosso); }
+
+.gr { display: inline-flex; align-items: baseline; gap: 2px; font-weight: 800; font-size: 14px; }
+.gr small { font-size: 10px; font-weight: 800; }
+.gr.gA { color: var(--giada); } .gr.gB { color: #6f9c34; }
+.gr.gC { color: #b58527; } .gr.gD { color: var(--rosso); }
+.ledger .ex { color: var(--giada); font-weight: 700; font-size: 12px; }
+.wl-count { margin-top: 10px; font-size: 12.5px; font-weight: 700; color: #0b3a75; }
+
+@media (max-width: 860px) { .ag-stats { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 480px) { .ag-stats { grid-template-columns: repeat(2, 1fr); } }
+
 /* ---- Zalo banner ---- */
 .zalo-banner { background: linear-gradient(120deg, #eaf3ff, #dcebff); border: 1px solid #c8ddf8; border-radius: 22px; padding: 32px; display: grid; grid-template-columns: 1fr auto; gap: 22px; align-items: center; }
 .zalo-banner h2 { margin: 0 0 6px; color: #0b3a75; font-size: 24px; font-weight: 800; }

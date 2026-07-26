@@ -102,6 +102,39 @@ const I18N = {
   sample_tag: { vi: "sổ mẫu", en: "sample" },
   del_arm: { vi: "Chạm lần nữa để xoá", en: "Tap again to delete" },
   more_entries: { vi: "… còn {n} bút toán cũ hơn — xuất CSV để xem tất cả", en: "… {n} older entries — export CSV to see all" },
+  // Đại lý thuế · kênh phân phối
+  ag_kicker: { vi: "Kênh phân phối", en: "Distribution channel" },
+  ag_h2: { vi: "Một đại lý thuế, cả trăm hộ kinh doanh", en: "One tax agent, a hundred households" },
+  ag_p: { vi: "Sổ Sạch không đi tìm từng hộ một. Đại lý thuế — người đã làm sổ sách cho hàng chục hộ — mời khách bằng mã của mình, hưởng 30% doanh thu, và quản lý cả danh sách trong một bảng. Đây là bảng thật của một đại lý mẫu.", en: "Sổ Sạch doesn't chase households one by one. Tax agents — who already keep the books for dozens of them — invite clients with their code, earn a 30% revenue share, and run the whole roster from one board. This is a live sample agency." },
+  ag_clients: { vi: "hộ kinh doanh", en: "households" },
+  ag_receipts: { vi: "bút toán đã xử lý", en: "receipts processed" },
+  ag_tracked: { vi: "doanh thu đang theo dõi", en: "revenue tracked" },
+  ag_avg: { vi: "điểm trung bình", en: "average score" },
+  ag_ready: { vi: "đủ chuẩn hồ sơ vay", en: "loan-ready" },
+  ag_income: { vi: "hoa hồng đại lý / tháng", en: "agent commission / mo" },
+  ag_at100: { vi: "{v} với 100 hộ", en: "{v} at 100 households" },
+  ag_credit_t: { vi: "🏦 Hồ sơ tín dụng danh mục", en: "🏦 Portfolio credit file" },
+  ag_credit_p: { vi: "Đây là thứ một ngân hàng hay quỹ tín dụng thực sự mua: dòng tiền có kiểm chứng của cả một danh mục hộ kinh doanh — nhóm khách xưa nay không có hồ sơ tín dụng nào.", en: "This is what a bank or credit fund actually buys: verified cash flow across a whole portfolio of micro-businesses — a segment that has never had a credit file." },
+  ag_th_name: { vi: "Hộ kinh doanh", en: "Household" },
+  ag_th_score: { vi: "Điểm", en: "Score" },
+  ag_th_rev: { vi: "Doanh thu quý", en: "Quarter revenue" },
+  ag_th_proj: { vi: "Dự kiến năm", en: "Projected/yr" },
+  ag_th_tax: { vi: "Thuế quý", en: "Quarter tax" },
+  ag_exempt: { vi: "miễn", en: "exempt" },
+  ag_demo_note: { vi: "Dữ liệu trình diễn — nhưng thuế và điểm được tính bằng chính công cụ của sản phẩm.", en: "Demo data — but the tax and scores are computed by the product's real engines." },
+  // Danh sách chờ
+  wl_title: { vi: "Đăng ký 100 hộ đầu tiên", en: "Join the first 100" },
+  wl_intro: { vi: "Bản OA đang mở cho 100 hộ kinh doanh đầu tiên tại TP.HCM. Để lại số điện thoại, Sổ Sạch sẽ liên hệ khi tới lượt bạn.", en: "The OA is opening to the first 100 households in HCMC. Leave your number and Sổ Sạch will reach out when it's your turn." },
+  wl_name: { vi: "Tên hộ kinh doanh / của bạn", en: "Business or your name" },
+  wl_phone: { vi: "Số điện thoại", en: "Phone number" },
+  wl_city: { vi: "Quận / tỉnh thành", en: "District / city" },
+  wl_role: { vi: "Bạn là…", en: "You are…" },
+  wl_role_ho: { vi: "Hộ kinh doanh", en: "A household business" },
+  wl_role_agent: { vi: "Đại lý thuế", en: "A tax agent" },
+  wl_send: { vi: "Đăng ký", en: "Sign up" },
+  wl_ok: { vi: "✅ Xong! Bạn là người thứ {n} trong danh sách.", en: "✅ Done! You're number {n} on the list." },
+  wl_again: { vi: "Số này đã có trong danh sách — bạn là người thứ {n}.", en: "Already on the list — you're number {n}." },
+  wl_count: { vi: "🔥 {n} đã đăng ký", en: "🔥 {n} already signed up" },
   // Điểm Sổ Sạch
   score_title: { vi: "Điểm Sổ Sạch", en: "Sổ Sạch Score" },
   score_sub: { vi: "Sổ càng sạch — càng dễ vay vốn", en: "Cleaner books — easier credit" },
@@ -199,6 +232,89 @@ function renderChart(monthly) {
       <line x1="4" y1="${base}" x2="374" y2="${base}" class="axis"/>
       ${bars}
     </svg>`;
+}
+
+// ---- Bảng đại lý thuế (kênh phân phối) + hồ sơ tín dụng danh mục -------------------
+async function renderAgency() {
+  const box = $("#agencyBox");
+  if (!box) return;
+  const d = await api("/api/agent/demo");
+  if (!d.ok) { box.innerHTML = ""; return; }
+  const p = d.portfolio;
+  const seg = (g, n) => n ? `<i class="g${g}" style="flex:${n}" title="${g}: ${n}">${n}</i>` : "";
+  box.innerHTML = `
+    <div class="ag-head">
+      <div><b>🧑‍💼 ${d.agency.name}</b><span>${d.agency.district} · ${LANG === "vi" ? "Mã mời" : "Invite code"} <b>${d.agency.code}</b> · ${d.quarter}</span></div>
+    </div>
+
+    <div class="ag-stats">
+      <div><b>${p.households}</b><span>${T("ag_clients")}</span></div>
+      <div><b>${p.receipts.toLocaleString("vi-VN")}</b><span>${T("ag_receipts")}</span></div>
+      <div><b>${vndShort(p.tracked)}</b><span>${T("ag_tracked")}</span></div>
+      <div><b>${p.avgScore}</b><span>${T("ag_avg")}</span></div>
+      <div><b>${p.loanReadyPct}%</b><span>${T("ag_ready")}</span></div>
+      <div><b>${vndShort(p.agentMonthlyVND)}</b><span>${T("ag_income")}<br/><em>${T("ag_at100", { v: vndShort(p.agentAt100VND) })}</em></span></div>
+    </div>
+
+    <div class="ag-credit">
+      <div class="ag-credit-h"><b>${T("ag_credit_t")}</b></div>
+      <div class="ag-dist">${seg("A", p.distribution.A)}${seg("B", p.distribution.B)}${seg("C", p.distribution.C)}${seg("D", p.distribution.D)}</div>
+      <p>${T("ag_credit_p")}</p>
+    </div>
+
+    <div class="ledger">
+      <table>
+        <tr><th>${T("ag_th_name")}</th><th>${T("ag_th_score")}</th>
+            <th style="text-align:right">${T("ag_th_rev")}</th>
+            <th style="text-align:right">${T("ag_th_proj")}</th>
+            <th style="text-align:right">${T("ag_th_tax")}</th></tr>
+        ${d.clients.map((c) => `
+          <tr>
+            <td><b>${c.name}</b><div class="src">${LANG === "vi" ? c.categoryVi : c.categoryEn}</div></td>
+            <td><span class="gr g${c.grade}">${c.score}<small>${c.grade}</small></span></td>
+            <td class="amt">${vndShort(c.quarterRevenue)}</td>
+            <td class="amt">${vndShort(c.projection)}</td>
+            <td class="amt">${c.exempt ? `<span class="ex">${T("ag_exempt")}</span>` : vnd(c.quarterTax)}</td>
+          </tr>`).join("")}
+      </table>
+    </div>
+    <div class="score-note" style="margin-top:10px">${T("ag_demo_note")}</div>`;
+}
+
+// ---- Danh sách chờ (thay cho mailto: — il lead resta, l'email si perde) ------------
+async function refreshWaitlistCount() {
+  const el = $("#wlCount");
+  if (!el) return;
+  const r = await api("/api/waitlist/count");
+  el.innerHTML = r.ok && r.count > 0 ? T("wl_count", { n: r.count }) : "";
+}
+
+function waitlistModal() {
+  showModal(`
+    <div class="modal-head">${T("wl_title")}</div>
+    <div class="modal-body">
+      <div class="conf-note">${T("wl_intro")}</div>
+      <div class="field"><label>${T("wl_name")}</label><input id="wName" /></div>
+      <div class="field"><label>${T("wl_phone")}</label><input id="wPhone" inputmode="numeric" placeholder="090 123 4567" /></div>
+      <div class="field"><label>${T("wl_city")}</label><input id="wCity" placeholder="Q. Bình Thạnh, TP.HCM" /></div>
+      <div class="field"><label>${T("wl_role")}</label>
+        <select id="wRole">
+          <option value="ho">${T("wl_role_ho")}</option>
+          <option value="agent">${T("wl_role_agent")}</option>
+        </select></div>
+      <div class="err" id="wErr"></div>
+      <button class="btn solid block" id="wGo">${T("wl_send")}</button>
+    </div>`);
+  $("#wGo").addEventListener("click", async () => {
+    const body = { name: $("#wName").value, phone: $("#wPhone").value, city: $("#wCity").value, role: $("#wRole").value };
+    const r = await api("/api/waitlist", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!r.ok) { $("#wErr").textContent = r.error || "error"; return; }
+    closeModal();
+    toast(T(r.already ? "wl_again" : "wl_ok", { n: r.position }));
+    refreshWaitlistCount();
+  });
 }
 
 // ---- Sổ mẫu -----------------------------------------------------------------------
@@ -393,6 +509,7 @@ async function init() {
     if (r.ok) { $("#manualForm").reset(); toast(T("saved")); refresh(); }
   });
   $("#declBtn").addEventListener("click", openDeclaration);
+  $("#waitlistBtn")?.addEventListener("click", waitlistModal);
   $("#modalBg").addEventListener("click", (e) => { if (e.target.id === "modalBg") closeModal(); });
   $("#langBtn").addEventListener("click", () => {
     LANG = LANG === "vi" ? "en" : "vi";
@@ -400,6 +517,8 @@ async function init() {
     applyI18n(); init2();
   });
   refresh();
+  renderAgency();
+  refreshWaitlistCount();
 }
 // re-render dinamiche dopo cambio lingua senza rifare i listener
 async function init2() {
@@ -410,6 +529,8 @@ async function init2() {
     .join("");
   sel.value = cur;
   refresh();
+  renderAgency();          // la tabella agenzia ha stringhe localizzate
+  refreshWaitlistCount();
   window.SS?.renderAcct?.();
 }
 

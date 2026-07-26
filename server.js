@@ -13,16 +13,49 @@ import {
 } from "./src/tax.js";
 import { extractReceipt, extractionMode } from "./src/extract.js";
 import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage } from "./src/zalo.js";
-import { initStore, storeMode, books, accounts, getBook, persistBook, persistAccount, removeBook } from "./src/store.js";
+import { initStore, storeMode, books, accounts, leads, getBook, persistBook, persistAccount, persistLead, removeBook } from "./src/store.js";
 import { register, login, publicAccount, findAgentByCode, findAccountByZaloId, createLinkCode, consumeLinkCode, authOptional, requireAuth, normalizePhone } from "./src/auth.js";
 import { PLANS, payosEnabled, createPaymentLink, verifyPayosWebhook, activateSub, subActive } from "./src/billing.js";
 import { sosachScore } from "./src/score.js";
 import { sampleEntries, SAMPLE_PROFILE } from "./src/sample.js";
+import { demoAgency } from "./src/demo_agency.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
+// Dietro il proxy di Render req.ip sarebbe l'IP del proxy per tutti — senza
+// questo il rate limit sotto sarebbe un unico secchio globale.
+app.set("trust proxy", 1);
 const PORT = process.env.PORT || 3500;
 const DATA_DIR = join(__dirname, "data");
+
+// ---- Rate limit (finestra scorrevole in memoria, zero dipendenze) --------------
+// /api/extract è pubblico E spende crediti Anthropic a ogni chiamata: senza
+// limite chiunque abbia l'URL può prosciugare il budget API. Doppio argine:
+// per-IP (abuso singolo) + tetto globale giornaliero (protegge la bolletta).
+const buckets = new Map();
+let globalDay = "", globalCount = 0;
+
+function rateLimit({ windowMs, max, globalMax, name }) {
+  return (req, res, next) => {
+    const now = Date.now();
+    const today = new Date(now).toISOString().slice(0, 10);
+    if (today !== globalDay) { globalDay = today; globalCount = 0; }
+    if (globalMax && globalCount >= globalMax) {
+      return res.status(429).json({ error: "Hôm nay đã đạt giới hạn dùng thử. Vui lòng thử lại ngày mai." });
+    }
+    const key = name + ":" + (req.ip || "?");
+    const b = buckets.get(key);
+    if (!b || now > b.reset) buckets.set(key, { n: 1, reset: now + windowMs });
+    else if (b.n >= max) {
+      res.setHeader("Retry-After", Math.ceil((b.reset - now) / 1000));
+      return res.status(429).json({ error: "Bạn thao tác hơi nhanh. Vui lòng thử lại sau ít phút." });
+    } else b.n++;
+    if (globalMax) globalCount++;
+    // potatura opportunistica: la mappa non deve crescere all'infinito
+    if (buckets.size > 5000) for (const [k, v] of buckets) if (now > v.reset) buckets.delete(k);
+    next();
+  };
+}
 
 // uid del libro: account autenticato → "u:<phone>"; altrimenti demo pubblico.
 const uidFor = (req) => (req.phone ? "u:" + req.phone : String(req.query.uid || "demo"));
@@ -178,7 +211,7 @@ app.post("/webhooks/payos", (req, res) => {
 });
 
 // ---- Estrazione da foto ----------------------------------------------------------
-app.post("/api/extract", async (req, res) => {
+app.post("/api/extract", rateLimit({ windowMs: 15 * 60_000, max: 15, globalMax: 400, name: "extract" }), async (req, res) => {
   const { image, mediaType } = req.body || {};
   if (!image) return res.status(400).json({ error: "image (base64) required" });
   try {
@@ -254,6 +287,49 @@ app.post("/api/profile", (req, res) => {
   if (revenueEstimate !== undefined) b.profile.revenueEstimate = Math.max(0, Number(revenueEstimate) || 0);
   persistBook(uid);
   res.json({ ok: true, profile: b.profile });
+});
+
+// ---- Bảng đại lý thuế (bản trình diễn) + hồ sơ tín dụng danh mục -----------------
+// Pubblico e senza login: è la storia di distribuzione (un agente → decine di hộ)
+// e il dato aggregato che un istituto di credito comprerebbe. Prima erano
+// visibili solo a un agente con clienti reali, cioè mai in una demo.
+app.get("/api/agent/demo", rateLimit({ windowMs: 60_000, max: 30, name: "agentdemo" }),
+  (_req, res) => res.json({ ok: true, ...demoAgency() }));
+
+// ---- Danh sách chờ pilot (thay cho mailto) ---------------------------------------
+// Il CTA era un mailto:, che su mobile perde il lead. Qui il contatto entra in
+// Postgres e sopravvive ai redeploy: è la pipeline delle prime 100 hộ.
+app.post("/api/waitlist", rateLimit({ windowMs: 60 * 60_000, max: 8, name: "waitlist" }), (req, res) => {
+  const { name, phone, city, role } = req.body || {};
+  const p = normalizePhone(phone);
+  if (!p) return res.status(400).json({ error: "Số điện thoại không hợp lệ." });
+  const existing = leads[p];
+  // Un reinvio non deve MAI impoverire un lead già raccolto: si aggiornano solo
+  // i campi valorizzati (un secondo invio col nome vuoto cancellava il nome).
+  const keep = (fresh, old, len) => {
+    const v = String(fresh ?? "").trim().slice(0, len);
+    return v || old || "";
+  };
+  leads[p] = {
+    phone: p,
+    name: keep(name, existing?.name, 120),
+    city: keep(city, existing?.city, 80),
+    role: role === "agent" || role === "ho" ? role : (existing?.role || "ho"),
+    createdAt: existing?.createdAt || new Date().toISOString(),
+  };
+  persistLead(p);
+  // la posizione è prova sociale onesta: numero reale, nessun gonfiaggio
+  res.json({ ok: true, position: Object.keys(leads).length, already: !!existing });
+});
+
+// Conteggio pubblico (solo numero, mai i contatti).
+app.get("/api/waitlist/count", (_req, res) => res.json({ ok: true, count: Object.keys(leads).length }));
+
+// Export per Yuri — protetto da ADMIN_TOKEN; senza token la rotta non esiste.
+app.get("/api/waitlist", (req, res) => {
+  const tok = process.env.ADMIN_TOKEN;
+  if (!tok || req.get("X-Admin-Token") !== tok) return res.status(404).json({ error: "not found" });
+  res.json({ ok: true, count: Object.keys(leads).length, leads: Object.values(leads) });
 });
 
 // ---- Sổ mẫu (demo per utenti/investitori — solo sandbox anonime) ------------------
