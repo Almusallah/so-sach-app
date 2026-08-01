@@ -1,3 +1,25 @@
+# Render Blueprint — Sổ Sạch web service.
+#
+# ⚠ DATABASE — READ BEFORE EDITING
+# This app REQUIRES Postgres (server.js boots via initStore(); /healthz reports
+# `"store":"postgres"`). The database is `so-sach-db` — PostgreSQL 18, Oregon,
+# instance type Basic-256mb, 1 GB storage, ~$6.30/month.
+#
+# It is deliberately NOT declared as a `databases:` block here. It was created
+# directly in the dashboard, so this Blueprint does not manage it; adding it now
+# would make a sync try to reconcile a resource it doesn't own — which risks
+# either a failed sync or a duplicate against a live database. Manage it from the
+# dashboard: https://dashboard.render.com/d/dpg-d98gt2etrd3s73eldsf0-a
+#
+# For the same reason DATABASE_URL below is `sync: false` (value lives in the
+# dashboard) rather than `fromDatabase:` — a fromDatabase link would overwrite the
+# working connection string on the next sync.
+#
+# HISTORY: created 2026-07-10 on the Free instance type, which expires after 30
+# days with NO backups of any kind. It was 8 days from deletion before being
+# upgraded to Basic-256mb on 2026-08-01. Do not move it back to Free.
+# Paid tier now provides point-in-time recovery (3-day window) + on-demand exports.
+
 services:
   - type: web
     name: so-sach
@@ -10,4 +32,10 @@ services:
       - key: NODE_VERSION
         value: 23.9.0
       - key: ANTHROPIC_API_KEY
+        sync: false
+      # Postgres connection string for so-sach-db — set in the dashboard.
+      # Without it the app falls back off Postgres and the ledger does not persist.
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
         sync: false

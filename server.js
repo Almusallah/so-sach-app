@@ -12,7 +12,8 @@ import {
   thresholdStatus, quarterOf, nextDeadline,
 } from "./src/tax.js";
 import { extractReceipt, extractionMode } from "./src/extract.js";
-import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage } from "./src/zalo.js";
+import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage, tokenStatus } from "./src/zalo.js";
+import { bootstrapFromEnv } from "./src/zalo_token.js";
 import { initStore, storeMode, books, accounts, leads, getBook, persistBook, persistAccount, persistLead, removeBook } from "./src/store.js";
 import { register, login, publicAccount, findAgentByCode, findAccountByZaloId, createLinkCode, consumeLinkCode, authOptional, requireAuth, normalizePhone } from "./src/auth.js";
 import { PLANS, payosEnabled, createPaymentLink, verifyPayosWebhook, activateSub, subActive } from "./src/billing.js";
@@ -431,9 +432,17 @@ app.get("/api/agent/client/:phone", requireAuth, (req, res) => {
   res.json({ ok: true, client: { phone, name: client.name }, ...ledgerPayload("u:" + phone) });
 });
 
-app.get("/healthz", (_req, res) => res.json({ ok: true, store: storeMode(), billing: payosEnabled() ? "payos" : "pilot" }));
+app.get("/healthz", (_req, res) => res.json({
+  ok: true, store: storeMode(), billing: payosEnabled() ? "payos" : "pilot",
+  // expiresInMin rende visibile a colpo d'occhio se la catena token è viva:
+  // è l'unico modo per accorgersi che il bot ha smesso di rispondere.
+  zalo: tokenStatus(),
+}));
 
 // ---- Boot -------------------------------------------------------------------------
 const mode = await initStore(DATA_DIR);
+// I token Zalo vivono nello store (il refresh_token ruota): le env sono solo
+// il seme del primo avvio. Va dopo initStore, che popola `settings`.
+await bootstrapFromEnv();
 app.listen(PORT, () =>
   console.log(`📒 Sổ Sạch http://localhost:${PORT} (extraction: ${extractionMode()}, zalo: ${zaloEnabled()}, store: ${mode}, billing: ${payosEnabled() ? "payos" : "pilot"})`));

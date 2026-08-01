@@ -15,6 +15,10 @@ export const accounts = {};
 // normalizzato. Vive nello stesso store dei libri: su Render è Postgres, quindi
 // i lead sopravvivono ai redeploy — sono la pipeline del pilota, non cache.
 export const leads = {};
+// Piccolo key-value di servizio (token OA Zalo & co.). Deve stare NELLO STORE,
+// non nelle env: il refresh_token Zalo ruota a ogni rinnovo, quindi il valore
+// incollato a mano nella dashboard è già vecchio dopo il primo refresh.
+export const settings = {};
 
 let mode = "json";
 let pool = null;
@@ -23,6 +27,7 @@ let DATA_DIR = null;
 const FILE_BOOKS = () => join(DATA_DIR, "ledger.json");
 const FILE_ACCTS = () => join(DATA_DIR, "accounts.json");
 const FILE_LEADS = () => join(DATA_DIR, "leads.json");
+const FILE_SETTINGS = () => join(DATA_DIR, "settings.json");
 
 export async function initStore(dataDir) {
   DATA_DIR = dataDir;
@@ -44,6 +49,7 @@ export async function initStore(dataDir) {
         if (row.kind === "book") books[row.key] = row.doc;
         else if (row.kind === "account") accounts[row.key] = row.doc;
         else if (row.kind === "lead") leads[row.key] = row.doc;
+        else if (row.kind === "setting") settings[row.key] = row.doc;
       }
       mode = "postgres";
       return mode;
@@ -55,6 +61,7 @@ export async function initStore(dataDir) {
   if (existsSync(FILE_BOOKS())) { try { Object.assign(books, JSON.parse(readFileSync(FILE_BOOKS(), "utf8"))); } catch {} }
   if (existsSync(FILE_ACCTS())) { try { Object.assign(accounts, JSON.parse(readFileSync(FILE_ACCTS(), "utf8"))); } catch {} }
   if (existsSync(FILE_LEADS())) { try { Object.assign(leads, JSON.parse(readFileSync(FILE_LEADS(), "utf8"))); } catch {} }
+  if (existsSync(FILE_SETTINGS())) { try { Object.assign(settings, JSON.parse(readFileSync(FILE_SETTINGS(), "utf8"))); } catch {} }
   mode = "json";
   return mode;
 }
@@ -83,6 +90,12 @@ export function persistAccount(phone) {
 export function persistLead(phone) {
   if (mode === "json") writeFileSync(FILE_LEADS(), JSON.stringify(leads, null, 2));
   else upsert("lead", phone, leads[phone]).catch((e) => console.error("persistLead:", e.message));
+}
+// await-abile: il refresh token Zalo va persistito PRIMA di essere usato, o un
+// crash nel mezzo lascia in DB una catena di token già invalidata da Zalo.
+export async function persistSetting(key) {
+  if (mode === "json") writeFileSync(FILE_SETTINGS(), JSON.stringify(settings, null, 2));
+  else await upsert("setting", key, settings[key]);
 }
 
 export function getBook(uid) {
