@@ -135,6 +135,16 @@ app.use(express.json({ limit: "12mb" }));
 app.use(authOptional);
 app.use(express.static(join(__dirname, "public")));
 
+// ---- Zalo domain ownership -------------------------------------------------------
+// Zalo offre due prove: meta tag (già in index.html) o un file HTML alla radice.
+// Le serviamo ENTRAMBE: il crawler di Zalo dichiara di leggere solo i primi 512kb
+// e di poter metterci fino a 72 ore, quindi due strade indipendenti riducono i
+// giri a vuoto. Il token non è un segreto — è un valore pubblico di proprietà.
+const ZALO_VERIFY = process.env.ZALO_VERIFY_TOKEN || "OixcA-RyFGWdzfqtmVCCBa3ntIgiXmTmE3Kv";
+app.get(`/zalo_verifier${ZALO_VERIFY}.html`, (_req, res) => {
+  res.type("html").send(ZALO_VERIFY);
+});
+
 // ---- Config --------------------------------------------------------------------
 app.get("/api/config", (_req, res) =>
   res.json({
