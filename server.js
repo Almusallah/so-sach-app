@@ -81,7 +81,23 @@ function mergeZaloBook(zaloId, phone) {
 }
 
 // ---- Zalo webhook (raw body PRIMA del json parser, per la firma) ---------------
-app.post("/webhooks/zalo", express.raw({ type: "*/*", limit: "1mb" }), async (req, res) => {
+// Deduplica gli eventi Zalo. "Webhook Retry" è ATTIVO lato Zalo: se non
+// rispondiamo in fretta, lo stesso messaggio arriva 2-3 volte e la stessa
+// ricevuta finisce nel sổ due o tre volte — davanti a un cliente sembra che il
+// prodotto conti male. La finestra dei retry è di minuti, quindi basta una
+// mappa in memoria con TTL (un riavvio la svuota: è accettabile).
+const seenEvents = new Map();
+const EVENT_TTL_MS = 10 * 60 * 1000;
+function alreadyHandled(key) {
+  if (!key) return false;                       // senza id non possiamo dedurre: meglio processare
+  const now = Date.now();
+  for (const [k, t] of seenEvents) if (now - t > EVENT_TTL_MS) seenEvents.delete(k);
+  if (seenEvents.has(key)) return true;
+  seenEvents.set(key, now);
+  return false;
+}
+
+app.post("/webhooks/zalo", express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
   const raw = req.body.toString("utf8");
   const mac = req.headers["x-zevent-signature"];
   let event;
@@ -93,16 +109,42 @@ app.post("/webhooks/zalo", express.raw({ type: "*/*", limit: "1mb" }), async (re
               `sender=${event?.sender?.id || "-"} sig=${mac ? "present" : "absent"}`);
   const check = verifyWebhook(raw, event.timestamp, mac);
   if (!check.ok && zaloEnabled()) return res.status(401).json({ error: "invalid signature" });
+
+  // ACK SUBITO, poi lavora. Leggere l'immagine e chiamare Claude vision prende
+  // secondi; se l'ACK aspettasse la fine, Zalo considererebbe l'endpoint lento
+  // e rispedirebbe l'evento. L'elaborazione prosegue dopo la risposta.
+  res.json({ ok: true });
+  const msgId = event?.message?.msg_id || event?.msg_id || null;
+  if (alreadyHandled(msgId)) {
+    console.log(`zalo webhook ↺ duplicate msg_id=${msgId} — ignorato`);
+    return;
+  }
+  handleZaloEvent(event).catch((e) => console.error("zalo webhook:", e.message));
+});
+
+async function handleZaloEvent(event) {
   try {
     const uid = event?.sender?.id || "zalo-unknown";
     if (event.event_name === "user_send_image") {
       const url = event?.message?.attachments?.[0]?.payload?.url;
       if (url) {
         const bookUid = zaloBookUid(uid); // account collegato o libro Zalo
-        const { base64, mediaType } = await fetchImageBase64(url);
-        const extracted = await extractReceipt(base64, mediaType);
+        // Ogni passo qui può fallire (URL CDN scaduto, foto illeggibile, quota
+        // Claude). Prima il fallimento era muto: l'utente mandava la foto e il
+        // bot non rispondeva NULLA — indistinguibile da "il prodotto è rotto".
+        let entry;
+        try {
+          const { base64, mediaType } = await fetchImageBase64(url);
+          const extracted = await extractReceipt(base64, mediaType);
+          entry = { id: "e" + Date.now(), ...extracted, source: "zalo", createdAt: new Date().toISOString() };
+        } catch (e) {
+          console.error("zalo image pipeline:", e.message);
+          await sendText(uid,
+            "😕 Mình chưa đọc được hoá đơn này. Bạn chụp lại rõ hơn (đủ ánh sáng, thấy rõ số tiền) " +
+            "rồi gửi lại giúp mình nhé. Hoặc gõ số tiền để mình ghi tay.");
+          return;
+        }
         const b = getBook(bookUid);
-        const entry = { id: "e" + Date.now(), ...extracted, source: "zalo", createdAt: new Date().toISOString() };
         b.entries.push(entry);
         persistBook(bookUid);
         await sendText(uid, formatEntryMessage(entry));
@@ -133,8 +175,7 @@ app.post("/webhooks/zalo", express.raw({ type: "*/*", limit: "1mb" }), async (re
       }
     }
   } catch (e) { console.error("zalo webhook:", e.message); }
-  res.json({ ok: true });
-});
+}
 
 app.use(express.json({ limit: "12mb" }));
 app.use(authOptional);
