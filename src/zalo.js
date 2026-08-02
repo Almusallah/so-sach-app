@@ -4,14 +4,21 @@
 //  Senza credenziali il modulo resta inerte e il prodotto gira via web.
 //
 //  Env richieste per attivarlo (vedi docs/DEPLOY.md):
-//    ZALO_OA_ACCESS_TOKEN  — token OA (rinnovabile via refresh flow)
-//    ZALO_APP_SECRET       — per verificare la firma dei webhook (X-ZEvent-Signature)
+//    ZALO_OA_ACCESS_TOKEN   — token OA (rinnovabile via refresh flow)
+//    ZALO_OA_REFRESH_TOKEN  — catena di rinnovo (ruota a ogni refresh)
+//    ZALO_OA_SECRET_KEY     — firma i webhook. È l'"OA Secret Key" della pagina
+//                             Webhook, NON la "Khóa bí mật" dell'app: sono due
+//                             chiavi diverse e incollare quella sbagliata faceva
+//                             fallire la firma senza un solo messaggio d'errore.
 //    ZALO_APP_ID
 // ============================================================================
 import { createHash } from "node:crypto";
 import { getAccessToken, tokenStatus } from "./zalo_token.js";
 
-const APP_SECRET = process.env.ZALO_APP_SECRET || null;
+// Accetta il nome nuovo e, per compatibilità, quello vecchio.
+const OA_SECRET = process.env.ZALO_OA_SECRET_KEY || process.env.ZALO_APP_SECRET || null;
+const SECRET_SOURCE = process.env.ZALO_OA_SECRET_KEY ? "ZALO_OA_SECRET_KEY"
+  : process.env.ZALO_APP_SECRET ? "ZALO_APP_SECRET (legacy name)" : "unset";
 const APP_ID = process.env.ZALO_APP_ID || null;
 const API = "https://openapi.zalo.me/v3.0/oa";
 
@@ -19,14 +26,29 @@ const API = "https://openapi.zalo.me/v3.0/oa";
 export const zaloEnabled = () => tokenStatus().configured;
 export { tokenStatus };
 
-// Verifica firma webhook Zalo: mac = sha256(appId + rawBody + timestamp + appSecret).
-// Se le credenziali non sono configurate, accetta solo in modalità demo.
+export const webhookSecretStatus = () => ({
+  configured: !!(OA_SECRET && APP_ID), source: SECRET_SOURCE, appId: !!APP_ID,
+});
+
+// Verifica firma webhook Zalo: mac = sha256(appId + rawBody + timestamp + OASecretKey).
 export function verifyWebhook(rawBody, timestamp, mac) {
-  if (!APP_SECRET || !APP_ID) return { ok: false, reason: "zalo not configured" };
+  if (!OA_SECRET || !APP_ID) return { ok: false, reason: "zalo not configured" };
   const expected = createHash("sha256")
-    .update(APP_ID + rawBody + String(timestamp) + APP_SECRET)
+    .update(APP_ID + rawBody + String(timestamp) + OA_SECRET)
     .digest("hex");
-  return { ok: expected === String(mac || "").replace(/^mac=/, ""), reason: "signature" };
+  const got = String(mac || "").replace(/^mac=/, "");
+  const ok = expected === got;
+  if (!ok) {
+    // RUMOROSO di proposito: una firma che non torna è quasi sempre la chiave
+    // sbagliata, e in silenzio sembra "il bot non risponde e non so perché".
+    console.error(
+      `zalo webhook SIGNATURE MISMATCH — key in use: ${SECRET_SOURCE}. ` +
+      `Expected ${expected.slice(0, 12)}… got ${got.slice(0, 12) || "(none)"}…  ` +
+      `Check ZALO_OA_SECRET_KEY holds the OA Secret Key from the Webhook page ` +
+      `(NOT the app's "Khóa bí mật").`
+    );
+  }
+  return { ok, reason: "signature" };
 }
 
 // Invio messaggio testo a un utente OA. Il token viene risolto a ogni invio

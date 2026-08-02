@@ -86,6 +86,11 @@ app.post("/webhooks/zalo", express.raw({ type: "*/*", limit: "1mb" }), async (re
   const mac = req.headers["x-zevent-signature"];
   let event;
   try { event = JSON.parse(raw); } catch { return res.status(400).json({ error: "bad json" }); }
+  // Traccia di ricezione PRIMA di qualunque logica: durante i test di Zalo la
+  // domanda è sempre "l'evento è arrivato?" e senza questa riga non è
+  // distinguibile da "arrivato ma ignorato".
+  console.log(`zalo webhook ← ${event?.event_name || "(no event_name)"} ` +
+              `sender=${event?.sender?.id || "-"} sig=${mac ? "present" : "absent"}`);
   const check = verifyWebhook(raw, event.timestamp, mac);
   if (!check.ok && zaloEnabled()) return res.status(401).json({ error: "invalid signature" });
   try {
