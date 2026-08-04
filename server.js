@@ -7,6 +7,7 @@
 import express from "express";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import {
   THRESHOLDS, CATEGORIES, totals, projectAnnual, quarterlyTax,
   thresholdStatus, quarterOf, nextDeadline,
@@ -127,7 +128,24 @@ async function handleZaloEvent(event) {
     const uid = event?.sender?.id || "zalo-unknown";
     if (event.event_name === "user_send_image") {
       const url = event?.message?.attachments?.[0]?.payload?.url;
-      if (url) {
+      // Zalo consegna i dati utente COMPLETI solo a IP vietnamiti (policy dal
+      // 29/02/2024, confermata dal BQT il 03/08/2026). I campi elencati sono di
+      // profilo — che non usiamo — ma se anche l'URL dell'allegato venisse
+      // tagliato su un IP estero, il loop centrale muore. Prima qui non c'era
+      // un ramo "else": nessun log, nessuna risposta, indistinguibile da un bot
+      // morto. Ora l'evento senza URL si vede e l'utente riceve una risposta.
+      if (!url) {
+        console.error(
+          "zalo image: NESSUN url nell'allegato — payload ricevuto: " +
+          JSON.stringify(event?.message?.attachments || null).slice(0, 400) +
+          "  ⚠️ se è vuoto o privo di 'url' è il filtro IP non-Vietnam: serve un IP VN."
+        );
+        await sendText(uid,
+          "😕 Mình nhận được ảnh nhưng chưa tải về được. Bạn thử gửi lại giúp mình nhé — " +
+          "hoặc gõ số tiền để mình ghi tay.");
+        return;
+      }
+      {
         const bookUid = zaloBookUid(uid); // account collegato o libro Zalo
         // Ogni passo qui può fallire (URL CDN scaduto, foto illeggibile, quota
         // Claude). Prima il fallimento era muto: l'utente mandava la foto e il
@@ -179,17 +197,41 @@ async function handleZaloEvent(event) {
 
 app.use(express.json({ limit: "12mb" }));
 app.use(authOptional);
-app.use(express.static(join(__dirname, "public")));
 
 // ---- Zalo domain ownership -------------------------------------------------------
-// Zalo offre due prove: meta tag (già in index.html) o un file HTML alla radice.
-// Le serviamo ENTRAMBE: il crawler di Zalo dichiara di leggere solo i primi 512kb
-// e di poter metterci fino a 72 ore, quindi due strade indipendenti riducono i
-// giri a vuoto. Il token non è un segreto — è un valore pubblico di proprietà.
-const ZALO_VERIFY = process.env.ZALO_VERIFY_TOKEN || "OixcA-RyFGWdzfqtmVCCBa3ntIgiXmTmE3Kv";
+// Zalo offre due prove: meta tag nell'index e file HTML alla radice. Le serviamo
+// ENTRAMBE: il crawler dichiara di leggere solo i primi 512kb e di poter metterci
+// fino a 72 ore, quindi due strade indipendenti riducono i giri a vuoto.
+// Il token non è un segreto — è un valore pubblico di proprietà del dominio.
+//
+// ⚠️ Zalo emette un token DIVERSO per ogni dominio. Quando si passa a un dominio
+// proprio (es. sosach.com.vn) il token cambia: qui basta cambiare la env, senza
+// toccare il codice né l'HTML — il meta tag viene riscritto al volo.
+const ZALO_VERIFY_DEFAULT = "OixcA-RyFGWdzfqtmVCCBa3ntIgiXmTmE3Kv";
+const ZALO_VERIFY = process.env.ZALO_VERIFY_TOKEN || ZALO_VERIFY_DEFAULT;
 app.get(`/zalo_verifier${ZALO_VERIFY}.html`, (_req, res) => {
   res.type("html").send(ZALO_VERIFY);
 });
+
+// Il meta tag vive in public/index.html con il token di default; se la env ne
+// indica un altro lo sostituiamo servendo la pagina. Letto una volta all'avvio.
+const INDEX_PATH = join(__dirname, "public", "index.html");
+let indexHtml = null;
+if (ZALO_VERIFY !== ZALO_VERIFY_DEFAULT) {
+  try {
+    indexHtml = readFileSync(INDEX_PATH, "utf8")
+      .replaceAll(ZALO_VERIFY_DEFAULT, ZALO_VERIFY);
+    console.log(`zalo: meta di verifica dominio riscritto → ${ZALO_VERIFY.slice(0, 8)}…`);
+  } catch (e) {
+    console.error("zalo verify meta:", e.message);   // si ricade sul file statico
+  }
+}
+app.get(["/", "/index.html"], (_req, res, next) => {
+  if (!indexHtml) return next();
+  res.type("html").send(indexHtml);
+});
+
+app.use(express.static(join(__dirname, "public")));
 
 // ---- Config --------------------------------------------------------------------
 app.get("/api/config", (_req, res) =>
