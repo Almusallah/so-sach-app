@@ -73,7 +73,11 @@ const I18N = {
   zb_p: { vi: "Không app mới, không mật khẩu mới. Kết bạn với OA Sổ Sạch, gửi ảnh hoá đơn là xong. Bản OA đang mở cho 100 hộ đầu tiên tại TP.HCM.", en: "No new app, no new password. Follow the Sổ Sạch OA, send receipt photos, done. The OA is opening to the first 100 households in HCMC." },
   zb_btn: { vi: "Đăng ký 100 hộ đầu tiên", en: "Join the first 100" },
   foot: { vi: "© 2026 Sổ Sạch — bản dùng thử. Số liệu thuế là ước tính, kiểm tra với đại lý thuế trước khi nộp.", en: "© 2026 Sổ Sạch — demo. Tax figures are estimates; verify with a licensed tax agent before filing." },
-  foot_co: { vi: "Một sản phẩm của CÔNG TY TNHH OFFICINE GẶP — TP. Hồ Chí Minh", en: "A product of OFFICINE GAP CO., LTD — Ho Chi Minh City" },
+  foot_co: { vi: "Sổ Sạch là tên sản phẩm/dịch vụ do CÔNG TY TNHH OFFICINE GẶP sở hữu và vận hành", en: "Sổ Sạch is a product/service name owned and operated by CÔNG TY TNHH OFFICINE GẶP" },
+  foot_mst: { vi: "Mã số doanh nghiệp: 0316904153 — Phòng Đăng ký kinh doanh, Sở Tài chính Thành phố Hồ Chí Minh", en: "Enterprise code: 0316904153 — Business Registration Office, Department of Finance, Ho Chi Minh City" },
+  foot_addr: { vi: "Địa chỉ trụ sở chính: Lầu 1, Tòa nhà H3, 384 Hoàng Diệu, Phường Khánh Hội, Thành phố Hồ Chí Minh, Việt Nam", en: "Registered office: Floor 1, H3 Building, 384 Hoàng Diệu, Khánh Hội Ward, Ho Chi Minh City, Vietnam" },
+  foot_rep: { vi: "Người đại diện theo pháp luật: YURI FRASSI — Chủ tịch Hội đồng thành viên", en: "Legal representative: YURI FRASSI — Chairman of the Members' Council" },
+  foot_contact: { vi: "Điện thoại: 0373 771 521 · Email: yuri@officinegap.com · Website chính thức: sosach.com.vn", en: "Phone: 0373 771 521 · Email: yuri@officinegap.com · Official website: sosach.com.vn" },
   // dinamiche
   card_thu: { vi: "Thu năm nay", en: "Income YTD" },
   card_chi: { vi: "Chi năm nay", en: "Expenses YTD" },
@@ -463,7 +467,7 @@ async function openDeclaration() {
       ${d.exempt ? `<div class="conf-note">${d.exemptNote}</div>` : ""}
       ${d.agent ? `<div class="conf-note">🧑‍💼 ${LANG === "vi" ? "Đại lý thuế của bạn" : "Your tax agent"}: <b>${d.agent.name}</b> (${d.agent.phone})</div>` : ""}
       <div class="disc">${d.disclaimer}</div>
-      <div class="share-foot">📒 ${LANG === "vi" ? "Tạo bởi" : "Made with"} <b>Sổ Sạch</b> — so-sach.onrender.com</div>
+      <div class="share-foot">📒 ${LANG === "vi" ? "Tạo bởi" : "Made with"} <b>Sổ Sạch</b> — sosach.com.vn</div>
       <div style="display:flex;gap:9px;margin-top:14px">
         <button class="btn solid block" onclick="window.print()">${T("d_print")}</button>
         <button class="btn ghost block" id="dClose">${T("d_close")}</button>
