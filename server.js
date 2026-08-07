@@ -204,31 +204,67 @@ app.use(authOptional);
 // fino a 72 ore, quindi due strade indipendenti riducono i giri a vuoto.
 // Il token non è un segreto — è un valore pubblico di proprietà del dominio.
 //
-// ⚠️ Zalo emette un token DIVERSO per ogni dominio. Quando si passa a un dominio
-// proprio (es. sosach.com.vn) il token cambia: qui basta cambiare la env, senza
-// toccare il codice né l'HTML — il meta tag viene riscritto al volo.
+// ⚠️ Zalo emette un token DIVERSO per ogni dominio, e lo stesso servizio risponde
+// su PIÙ domini (sosach.com.vn e so-sach.onrender.com). Un token solo non basta:
+// scrivendo quello nuovo si romperebbe la verifica del dominio già approvato —
+// e quello vecchio è il dominio su cui gira l'app in revisione. Quindi il token
+// si sceglie in base all'Host della richiesta.
+//
+//   ZALO_VERIFY_TOKENS = "sosach.com.vn:TOKEN_A,so-sach.onrender.com:TOKEN_B"
+//   ZALO_VERIFY_TOKEN  = "TOKEN"   ← forma vecchia, vale per ogni host
+//
 const ZALO_VERIFY_DEFAULT = "OixcA-RyFGWdzfqtmVCCBa3ntIgiXmTmE3Kv";
-const ZALO_VERIFY = process.env.ZALO_VERIFY_TOKEN || ZALO_VERIFY_DEFAULT;
-app.get(`/zalo_verifier${ZALO_VERIFY}.html`, (_req, res) => {
-  res.type("html").send(ZALO_VERIFY);
+
+const VERIFY_BY_HOST = new Map();
+for (const pair of (process.env.ZALO_VERIFY_TOKENS || "").split(",")) {
+  const i = pair.indexOf(":");
+  if (i < 1) continue;
+  const host = pair.slice(0, i).trim().toLowerCase();
+  const token = pair.slice(i + 1).trim();
+  if (host && token) VERIFY_BY_HOST.set(host, token);
+}
+if (process.env.ZALO_VERIFY_TOKEN) {
+  VERIFY_BY_HOST.set("*", process.env.ZALO_VERIFY_TOKEN.trim());
+}
+const ALL_VERIFY_TOKENS = new Set([ZALO_VERIFY_DEFAULT, ...VERIFY_BY_HOST.values()]);
+if (VERIFY_BY_HOST.size) {
+  console.log("zalo: token di verifica per host →",
+    [...VERIFY_BY_HOST].map(([h, t]) => `${h}=${t.slice(0, 8)}…`).join(" "));
+}
+
+function verifyTokenFor(req) {
+  const host = String(req.headers.host || "").split(":")[0].toLowerCase();
+  return VERIFY_BY_HOST.get(host) || VERIFY_BY_HOST.get("*") || ZALO_VERIFY_DEFAULT;
+}
+
+// Serviamo il file di verifica per OGNI token conosciuto: il crawler lo chiede
+// sul proprio dominio, e rispondere solo all'ultimo configurato è ciò che
+// romperebbe il dominio precedente.
+app.use((req, res, next) => {
+  const m = req.path.match(/^\/zalo_verifier(.+)\.html$/);
+  if (m && ALL_VERIFY_TOKENS.has(m[1])) return res.type("html").send(m[1]);
+  next();
 });
 
-// Il meta tag vive in public/index.html con il token di default; se la env ne
-// indica un altro lo sostituiamo servendo la pagina. Letto una volta all'avvio.
+// Il meta tag vive in public/index.html con il token di default; per gli altri
+// host lo riscriviamo al volo. Il file si legge una volta, le varianti si
+// costruiscono una volta per token.
 const INDEX_PATH = join(__dirname, "public", "index.html");
-let indexHtml = null;
-if (ZALO_VERIFY !== ZALO_VERIFY_DEFAULT) {
-  try {
-    indexHtml = readFileSync(INDEX_PATH, "utf8")
-      .replaceAll(ZALO_VERIFY_DEFAULT, ZALO_VERIFY);
-    console.log(`zalo: meta di verifica dominio riscritto → ${ZALO_VERIFY.slice(0, 8)}…`);
-  } catch (e) {
-    console.error("zalo verify meta:", e.message);   // si ricade sul file statico
-  }
+let indexRaw = null;
+try {
+  indexRaw = readFileSync(INDEX_PATH, "utf8");
+} catch (e) {
+  console.error("zalo verify meta:", e.message);     // si ricade sul file statico
 }
-app.get(["/", "/index.html"], (_req, res, next) => {
-  if (!indexHtml) return next();
-  res.type("html").send(indexHtml);
+const indexByToken = new Map();
+app.get(["/", "/index.html"], (req, res, next) => {
+  if (!indexRaw) return next();
+  const token = verifyTokenFor(req);
+  if (token === ZALO_VERIFY_DEFAULT) return next();  // il file statico ha già questo
+  if (!indexByToken.has(token)) {
+    indexByToken.set(token, indexRaw.replaceAll(ZALO_VERIFY_DEFAULT, token));
+  }
+  res.type("html").send(indexByToken.get(token));
 });
 
 app.use(express.static(join(__dirname, "public")));
