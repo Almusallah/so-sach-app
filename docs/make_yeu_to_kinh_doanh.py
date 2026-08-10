@@ -55,7 +55,7 @@ OA_ID = "764694199561771441"
 COMPANY = "CÔNG TY TNHH OFFICINE GẶP"
 MST = "0316904153"
 SITE = "https://sosach.com.vn"
-TODAY = "07/08/2026"
+TODAY = "10/08/2026"
 
 
 def style(size=10, leading=None, font="Ar", color=INK, space=0):
