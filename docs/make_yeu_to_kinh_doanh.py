@@ -19,6 +19,7 @@ Images are captured separately (headless Chrome) and read from IMG_DIR.
 
     python3 docs/make_yeu_to_kinh_doanh.py
 """
+from datetime import date
 from pathlib import Path
 
 from reportlab.lib.pagesizes import A4
@@ -55,7 +56,11 @@ OA_ID = "764694199561771441"
 COMPANY = "CÔNG TY TNHH OFFICINE GẶP"
 MST = "0316904153"
 SITE = "https://sosach.com.vn"
-TODAY = "10/08/2026"
+# The footer states when the screenshots were taken, so it must track the day the
+# images are actually captured — a hardcoded date silently goes stale, and a
+# regulator reading "ảnh chụp ngày X" on a capture from another day is a needless
+# thing to be caught on. Re-run the capture and this build on the same day.
+TODAY = date.today().strftime("%d/%m/%Y")
 
 
 def style(size=10, leading=None, font="Ar", color=INK, space=0):
