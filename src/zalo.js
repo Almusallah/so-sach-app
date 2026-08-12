@@ -98,11 +98,33 @@ export async function sendText(userId, text) {
 }
 
 // Scarica un'immagine allegata a un messaggio Zalo (via URL fornito nell'evento).
+// Claude accetta SOLO image/jpeg|png|gif|webp. Il content-type di Zalo non è
+// in quella lista (primo scontrino vero, 12/08/2026: l'API ha risposto
+// "media_type: Input should be 'image/jpeg', 'image/png', 'image/gif' or
+// 'image/webp'" e l'estrazione è caduta in demo). L'header è ciò che Zalo
+// DICHIARA; i byte sono ciò che Claude verifica — quindi si guardano i byte.
+function sniffMediaType(buf) {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf.length >= 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (buf.length >= 6 && buf.subarray(0, 4).toString("latin1") === "GIF8") return "image/gif";
+  if (buf.length >= 12 && buf.subarray(0, 4).toString("latin1") === "RIFF"
+      && buf.subarray(8, 12).toString("latin1") === "WEBP") return "image/webp";
+  return null;
+}
+
 export async function fetchImageBase64(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`zalo image ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
-  const mediaType = res.headers.get("content-type") || "image/jpeg";
+  const declared = (res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  const sniffed = sniffMediaType(buf);
+  // jpg→jpeg è l'alias che rompe più spesso; il resto passa solo se già valido.
+  const normalised = declared === "image/jpg" ? "image/jpeg" : declared;
+  const allowed = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+  const mediaType = sniffed || (allowed.includes(normalised) ? normalised : "image/jpeg");
+  if (sniffed && normalised && sniffed !== normalised) {
+    console.log(`zalo image: content-type dichiarato "${declared}" ≠ byte reali ${sniffed} — uso i byte`);
+  }
   return { base64: buf.toString("base64"), mediaType };
 }
 
