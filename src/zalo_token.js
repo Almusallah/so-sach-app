@@ -55,6 +55,42 @@ export async function bootstrapFromEnv() {
   return settings[KEY];
 }
 
+// Primo rilascio della catena: l'admin OA concede i permessi su
+// oauth.zaloapp.com e Zalo rimanda al callback con un `oa_code` monouso, che
+// qui diventa access + refresh token. Senza questo passaggio non esiste alcuna
+// catena da rinnovare — `refresh()` non ha nulla su cui lavorare.
+//
+// Il codice scade in fretta (~1 minuto) ed è usa e getta: se lo scambio
+// fallisce va rifatto il giro dei permessi, non ritentato.
+export async function exchangeOaCode(code, codeVerifier = null) {
+  if (!code) throw new Error("oa_code mancante");
+  const body = new URLSearchParams({
+    code,
+    app_id: APP_ID() || "",
+    grant_type: "authorization_code",
+  });
+  if (codeVerifier) body.set("code_verifier", codeVerifier);
+  const res = await fetch(OAUTH, {
+    method: "POST",
+    headers: { secret_key: APP_SECRET() || "", "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!data.access_token) {
+    throw new Error(`zalo oa_code exchange failed: ${JSON.stringify(data).slice(0, 200)}`);
+  }
+  // Stessa disciplina di refresh(): scrivere PRIMA di restituire.
+  settings[KEY] = {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token || null,
+    expiresAt: Date.now() + (Number(data.expires_in || 3600) * 1000),
+    source: "oa_code",
+    updatedAt: new Date().toISOString(),
+  };
+  await persistSetting(KEY);
+  return settings[KEY];
+}
+
 async function refresh(refreshToken) {
   const body = new URLSearchParams({
     refresh_token: refreshToken,

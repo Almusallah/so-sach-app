@@ -19,6 +19,19 @@ import { getAccessToken, tokenStatus } from "./zalo_token.js";
 const OA_SECRET = process.env.ZALO_OA_SECRET_KEY || process.env.ZALO_APP_SECRET || null;
 const SECRET_SOURCE = process.env.ZALO_OA_SECRET_KEY ? "ZALO_OA_SECRET_KEY"
   : process.env.ZALO_APP_SECRET ? "ZALO_APP_SECRET (legacy name)" : "unset";
+
+// Il fallback nacque quando le due chiavi erano lo stesso valore. Da quando
+// esiste il flusso OAuth non lo sono più: ZALO_APP_SECRET è la "Khóa bí mật"
+// dell'app e serve a zalo_token.js per scambiare oa_code e refresh. Usarla per
+// firmare i webhook produce un mismatch a ogni messaggio — visibile solo nei
+// log, col bot che tace. Meglio dirlo all'avvio che scoprirlo dal pilota.
+if (!process.env.ZALO_OA_SECRET_KEY && process.env.ZALO_APP_SECRET) {
+  console.warn(
+    "⚠️ zalo: ZALO_OA_SECRET_KEY non impostata, uso ZALO_APP_SECRET per la firma webhook. " +
+    "Sono chiavi DIVERSE: ZALO_APP_SECRET è la Khóa bí mật dell'app (OAuth), " +
+    "la firma vuole l'OA Secret Key della pagina Webhook. Se i webhook falliscono, è questo."
+  );
+}
 const APP_ID = process.env.ZALO_APP_ID || null;
 const API = "https://openapi.zalo.me/v3.0/oa";
 

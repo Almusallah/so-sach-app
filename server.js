@@ -14,7 +14,7 @@ import {
 } from "./src/tax.js";
 import { extractReceipt, extractionMode } from "./src/extract.js";
 import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage, tokenStatus } from "./src/zalo.js";
-import { bootstrapFromEnv } from "./src/zalo_token.js";
+import { bootstrapFromEnv, exchangeOaCode } from "./src/zalo_token.js";
 import { initStore, storeMode, books, accounts, leads, getBook, persistBook, persistAccount, persistLead, removeBook } from "./src/store.js";
 import { register, login, publicAccount, findAgentByCode, findAccountByZaloId, createLinkCode, consumeLinkCode, authOptional, requireAuth, normalizePhone } from "./src/auth.js";
 import { PLANS, payosEnabled, createPaymentLink, verifyPayosWebhook, activateSub, subActive } from "./src/billing.js";
@@ -265,6 +265,38 @@ app.get(["/", "/index.html"], (req, res, next) => {
     indexByToken.set(token, indexRaw.replaceAll(ZALO_VERIFY_DEFAULT, token));
   }
   res.type("html").send(indexByToken.get(token));
+});
+
+// ---- Zalo OA: rilascio iniziale dei token ----------------------------------------
+// L'admin OA concede i permessi su oauth.zaloapp.com; Zalo rimanda qui con un
+// `oa_code` monouso che scambiamo subito per access + refresh token. Da quel
+// momento la catena vive nello store e si rinnova da sola: NON serve incollare
+// ZALO_OA_ACCESS_TOKEN / ZALO_OA_REFRESH_TOKEN nelle env.
+//
+// Non protetta da token admin di proposito: l'unico modo di arrivarci con un
+// codice valido è essere stati mandati da Zalo dopo aver concesso i permessi
+// sulla NOSTRA app. Un codice inventato fallisce lo scambio e non tocca nulla.
+// La pagina non mostra mai i token: solo l'esito e la scadenza.
+app.get("/zalo/oa-callback", async (req, res) => {
+  const code = req.query.oa_code || req.query.code || null;
+  if (!code) {
+    return res.status(400).type("html").send(
+      "<h3>Thiếu oa_code</h3><p>Mở lại đường dẫn cấp quyền từ developers.zalo.me.</p>");
+  }
+  try {
+    const t = await exchangeOaCode(code, req.query.code_verifier || null);
+    const mins = Math.round((t.expiresAt - Date.now()) / 60000);
+    console.log(`zalo: catena token creata da oa_code — scade tra ${mins} min, refresh=${!!t.refreshToken}`);
+    res.type("html").send(
+      `<h3>✅ Đã kết nối Official Account</h3>
+       <p>Access token hết hạn sau <b>${mins} phút</b>, tự động gia hạn${t.refreshToken ? "" : " — ⚠️ KHÔNG có refresh token"}.</p>
+       <p>Kiểm tra: <a href="/healthz">/healthz</a></p>`);
+  } catch (e) {
+    console.error("zalo oa-callback:", e.message);
+    res.status(400).type("html").send(
+      `<h3>❌ Không đổi được oa_code</h3><pre>${String(e.message).slice(0, 300)}</pre>
+       <p>Mã chỉ dùng được một lần và hết hạn rất nhanh — hãy bấm lại đường dẫn cấp quyền.</p>`);
+  }
 });
 
 app.use(express.static(join(__dirname, "public")));
