@@ -37,8 +37,8 @@ def chrome(c, idx, total, lang, dark=False):
     """Footer + slide number on light slides."""
     if dark: return
     c.setFillColor(MUTED); c.setFont("SS-Sans", 7.5)
-    c.drawString(MARG, 10 * mm, "Sổ Sạch — investor pitch · Maestro Equity Partners · July 2026"
-                 if lang == "en" else "Sổ Sạch — pitch investitori · Maestro Equity Partners · Luglio 2026")
+    c.drawString(MARG, 10 * mm, "Sổ Sạch — investor pitch · Maestro Equity Partners · August 2026"
+                 if lang == "en" else "Sổ Sạch — pitch investitori · Maestro Equity Partners · Agosto 2026")
     c.drawRightString(W - MARG, 10 * mm, f"{idx} / {total}")
 
 def kicker(c, text, y, color=GOLD):
@@ -91,15 +91,15 @@ def build(lang, out):
     c.setFillColor(GIADA); c.rect(0, 0, W, H, stroke=0, fill=1)
     c.setFillColor(GIADA_MID); c.circle(W - 70, H - 60, 170, stroke=0, fill=1)
     c.setFillColor(GOLD_LT); c.setFont("SS-Sans-Bold", 13)
-    c.drawString(MARG, H - 38 * mm, "INVESTOR PITCH · JULY 2026" if E else "PITCH INVESTITORI · LUGLIO 2026")
+    c.drawString(MARG, H - 38 * mm, "INVESTOR PITCH · AUGUST 2026" if E else "PITCH INVESTITORI · AGOSTO 2026")
     c.setFillColor(WHITE); c.setFont("SS-Serif-Bold", 64)
     c.drawString(MARG, H - 62 * mm, "Sổ Sạch")
     c.setFillColor(MINT); c.setFont("SS-Sans", 17)
     c.drawString(MARG, H - 76 * mm, "The AI bookkeeper on Zalo for Vietnam's 5.2 million household businesses."
                  if E else "Il commercialista AI su Zalo per i 5,2 milioni di hộ kinh doanh del Vietnam.")
     c.setFillColor(GOLD_LT); c.setFont("SS-Sans-Bold", 14)
-    c.drawString(MARG, H - 92 * mm, ("LIVE at so-sach.onrender.com  ·  Raising $300k"
-                                     if E else "LIVE su so-sach.onrender.com  ·  Raccolta $300k"))
+    c.drawString(MARG, H - 92 * mm, ("LIVE at sosach.com.vn  ·  Verified Zalo OA in production  ·  Raising $300k"
+                                     if E else "LIVE su sosach.com.vn  ·  Zalo OA verificato in produzione  ·  Raccolta $300k"))
     c.setFillColor(MINT); c.setFont("SS-Sans", 11)
     c.drawString(MARG, 18 * mm, "Yuri Frassi · frassiyuri@gmail.com · licensed Vietnamese company (SaaS)"
                  if E else "Yuri Frassi · frassiyuri@gmail.com · società vietnamita licenziataria (SaaS)")
@@ -169,7 +169,7 @@ def build(lang, out):
         pw, ph = p.wrap(bw - 28, 100); yy -= ph
         p.drawOn(c, bx + 14, yy); yy -= 5
     c.setFillColor(GOLD); c.setFont("SS-Sans-Bold", 11)
-    c.drawString(bx + 14, 30 * mm, "→ so-sach.onrender.com — try it in the meeting" if E else "→ so-sach.onrender.com — provatelo in riunione")
+    c.drawString(bx + 14, 30 * mm, "→ sosach.com.vn — try it in the meeting" if E else "→ sosach.com.vn — provatelo in riunione")
     chrome(c, 3, TOTAL, lang); c.showPage()
 
     # ---------------- 4 · MARKET ----------------
@@ -230,20 +230,36 @@ def build(lang, out):
          if E else "<b>Compliance, mai 'ottimizzazione fiscale'.</b> Calcoliamo ciò che la legge prescrive e rimandiamo al professionista — l'unica postura difendibile in uno spazio regolato."),
         ("<b>Viral by artefact:</b> every declaration and receipt shared on Zalo carries the Sổ Sạch mark — the customer's paperwork recruits the next customer."
          if E else "<b>Virale per artefatto:</b> ogni dichiarazione e ricevuta condivisa su Zalo porta il marchio Sổ Sạch — la burocrazia del cliente recluta il prossimo cliente."),
-    ], MARG, H - 92 * mm, W - 2 * MARG)
+        ("<b>We record how much to trust each figure.</b> Every entry is tagged by provenance — bank-verified, cash-register, or self-declared. Competitors hold a pile of numbers; we hold a book a lender can underwrite, which is what turns 40k subscribers into a credit-data asset rather than a subscription list."
+         if E else "<b>Registriamo quanto fidarsi di ogni cifra.</b> Ogni voce è marcata per provenienza — verificata da banca, da registratore di cassa, o autodichiarata. I concorrenti hanno un mucchio di numeri; noi un libro che un prestatore può istruire, ed è ciò che trasforma 40k abbonati in un asset di dati creditizi invece che in una lista di abbonamenti."),
+    ], MARG, H - 88 * mm, W - 2 * MARG)
     chrome(c, 6, TOTAL, lang); c.showPage()
 
     # ---------------- 7 · ROADMAP ----------------
     kicker(c, "06 · Traction & roadmap" if E else "06 · Traction e roadmap", H - 24 * mm)
-    title(c, "Live product now. Channel-built growth next." if E else "Prodotto live ora. Crescita costruita sul canale.", H - 36 * mm, size=25)
+    title(c, "The distribution risk is retired." if E else "Il rischio distribuzione è chiuso.", H - 36 * mm, size=25)
+
+    # August 2026: the channel stopped being a promise. A VC discounts a
+    # roadmap; they do not discount a verified account already in production.
+    stat_cards(c, [
+        ("12 Aug", "Zalo OA verified & live" if E else "Zalo OA verificato e live"),
+        ("US-hosted", "receipt pipeline proven" if E else "pipeline scontrini provata"),
+        (".vn", "domain owned by the company" if E else "dominio della società"),
+        ("01/CNKD", "auto-filled from the book" if E else "auto-compilato dal libro"),
+    ], MARG, H - 44 * mm, (W - 2 * MARG - 3 * 14) / 4, 22 * mm)
+
     draw_table(c, [
         [("When" if E else "Quando"), ("Milestone" if E else "Milestone"), ("Proof" if E else "Prova")],
-        [("Today" if E else "Oggi"), ("Product live: ledger, declarations, agent dashboard, billing rails" if E else "Prodotto live: libro, dichiarazioni, cruscotto agenti, incassi"), "so-sach.onrender.com"],
+        [("Aug 2026" if E else "Ago 2026"),
+         ("Verified Zalo Official Account in production after 4 review rounds — the barrier that stops foreign-run competitors"
+          if E else "Zalo Official Account verificato in produzione dopo 4 round di revisione — la barriera che ferma i concorrenti a guida straniera"),
+         ("OA 7646…441 live" if E else "OA 7646…441 live")],
+        [("Today" if E else "Oggi"), ("Product live: ledger, declarations, agent dashboard, billing rails" if E else "Prodotto live: libro, dichiarazioni, cruscotto agenti, incassi"), "sosach.com.vn"],
         ["Q3 2026", ("100-household PAID pilot in 2 HCMC districts via 3–5 tax agents; Zalo OA keys live" if E else "Pilota PAGANTE da 100 hộ in 2 distretti HCMC via 3–5 đại lý thuế; chiavi Zalo OA attive"), ("week-4 retention ≥25%" if E else "retention sett.4 ≥25%")],
         ["Q4 2026", ("Zalo Mini App (zero-install) + Q4 filing campaign" if E else "Zalo Mini App (zero-install) + campagna deposito Q4"), ("500 paying" if E else "500 paganti")],
         ["Mid-2027", ("2,000 subscribers · 25 active agents · e-invoice partner API" if E else "2.000 abbonati · 25 agenti attivi · API partner e-fattura"), ("$70k ARR run-rate" if E else "run-rate ARR $70k")],
         ["2029", ("40k subscribers via southern provinces + agent network" if E else "40k abbonati via province del sud + rete agenti"), "$1.6M ARR · EBITDA +$520k"],
-    ], [90, 420, 170], MARG, H - 46 * mm)
+    ], [90, 420, 170], MARG, H - 72 * mm)
     c.setFillColor(MUTED); c.setFont("SS-Sans", 10)
     c.drawString(MARG, 30 * mm, ("Founder execution proof: eight live products shipped solo with AI leverage in 2026. This team ships in days, not quarters."
                                  if E else "Prova di esecuzione: otto prodotti live lanciati in solo con leva AI nel 2026. Questo team rilascia in giorni, non trimestri."))
@@ -300,7 +316,7 @@ def build(lang, out):
                ("<b>Fintech:</b> the verified merchant ledger is the underwriting layer MoMo/VNPay/banks lack for merchant credit" if E else "<b>Fintech:</b> il libro verificato degli esercenti è il layer di underwriting che manca a MoMo/VNPay/banche per il credito"),
                ("<b>VNG/Zalo:</b> we build commerce data on their rail — a natural tuck-in" if E else "<b>VNG/Zalo:</b> costruiamo dati commerciali sul loro binario — tuck-in naturale")])
     c.setFillColor(GOLD_LT); c.setFont("SS-Sans-Bold", 13)
-    c.drawString(MARG, 24 * mm, "Try it before you decide: so-sach.onrender.com" if E else "Provatelo prima di decidere: so-sach.onrender.com")
+    c.drawString(MARG, 24 * mm, "Try it before you decide: sosach.com.vn" if E else "Provatelo prima di decidere: sosach.com.vn")
     c.setFillColor(MINT); c.setFont("SS-Sans", 10)
     c.drawString(MARG, 17 * mm, "Yuri Frassi · frassiyuri@gmail.com · full memo, financial model and demo credentials on request (MNDA for code access)"
                  if E else "Yuri Frassi · frassiyuri@gmail.com · memo completo, modello finanziario e credenziali demo su richiesta (MNDA per l'accesso al codice)")
