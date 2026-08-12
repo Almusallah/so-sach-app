@@ -19,6 +19,7 @@ import { initStore, storeMode, books, accounts, leads, getBook, persistBook, per
 import { register, login, publicAccount, findAgentByCode, findAccountByZaloId, createLinkCode, consumeLinkCode, authOptional, requireAuth, normalizePhone } from "./src/auth.js";
 import { PLANS, payosEnabled, createPaymentLink, verifyPayosWebhook, activateSub, subActive } from "./src/billing.js";
 import { sosachScore } from "./src/score.js";
+import { parseMoneyCommand } from "./src/amount.js";
 import { sampleEntries, SAMPLE_PROFILE } from "./src/sample.js";
 import { demoAgency } from "./src/demo_agency.js";
 
@@ -154,7 +155,10 @@ async function handleZaloEvent(event) {
         try {
           const { base64, mediaType } = await fetchImageBase64(url);
           const extracted = await extractReceipt(base64, mediaType);
-          entry = { id: "e" + Date.now(), ...extracted, source: "zalo", createdAt: new Date().toISOString() };
+          // `source` dice DA DOVE è arrivata la voce, `provenance` QUANTO
+          // fidarsene: sono due domande diverse e un prestatore compra solo la
+          // seconda. Valori previsti: manual | photo | bank | pos | einvoice.
+          entry = { id: "e" + Date.now(), ...extracted, source: "zalo", provenance: "photo", createdAt: new Date().toISOString() };
         } catch (e) {
           console.error("zalo image pipeline:", e.message);
           await sendText(uid,
@@ -185,10 +189,45 @@ async function handleZaloEvent(event) {
         const now = new Date();
         const t = totals(b.entries, { year: now.getFullYear() });
         await sendText(uid, `📒 Sổ năm ${now.getFullYear()}:\nThu: ${t.revenue.toLocaleString("vi-VN")}đ\nChi: ${t.expenses.toLocaleString("vi-VN")}đ\nLãi gộp: ${t.net.toLocaleString("vi-VN")}đ`);
+      } else if (parseMoneyCommand(rawText)) {
+        // Il totale di fine giornata scritto a mano: la via principale per il
+        // FATTURATO di un quán, dove le foto funzionano solo per le spese.
+        const cmd = parseMoneyCommand(rawText);
+        const vnd = (n) => n.toLocaleString("vi-VN") + "đ";
+        if (cmd.needsType) {
+          // Non si indovina: per un quán sarebbe quasi sempre incasso, ma
+          // "quasi sempre" in un registro fiscale è una voce sbagliata che
+          // sembra giusta. Una domanda costa un messaggio.
+          await sendText(uid,
+            `Bạn muốn ghi ${vnd(cmd.amount)} là khoản nào?\n` +
+            `• Gõ "thu ${cmd.amount}" nếu là tiền bán hàng\n` +
+            `• Gõ "chi ${cmd.amount}" nếu là tiền mua/chi phí`);
+        } else {
+          const bookUid = zaloBookUid(uid);
+          const entry = {
+            id: "e" + Date.now(),
+            type: cmd.type,
+            amount: cmd.amount,
+            date: new Date().toISOString().slice(0, 10),
+            counterparty: cmd.type === "thu" ? "Khách lẻ" : "",
+            description: cmd.type === "thu" ? "Tổng bán trong ngày" : "Ghi tay",
+            source: "zalo",
+            provenance: "manual",
+            createdAt: new Date().toISOString(),
+          };
+          const b = getBook(bookUid);
+          b.entries.push(entry);
+          persistBook(bookUid);
+          await sendText(uid, formatEntryMessage(entry));
+        }
       } else {
         const linked = !!findAccountByZaloId(uid);
         await sendText(uid,
-          "Chào bạn! Chụp ảnh hoá đơn gửi vào đây, Sổ Sạch sẽ ghi sổ giúp bạn. Gõ \"sổ\" để xem tổng kết." +
+          "Chào bạn! Có 3 cách ghi sổ:\n" +
+          "📸 Chụp hoá đơn — mình đọc và ghi giúp\n" +
+          "📝 Chụp tờ giấy ghi tay cuối ngày cũng được\n" +
+          "⌨️ Hoặc gõ nhanh: \"thu 2tr4\" · \"chi 500k\"\n\n" +
+          "Gõ \"sổ\" để xem tổng kết." +
           (linked ? "" : "\n\n💡 Có tài khoản trên web? Vào phần Tài khoản → \"Lấy mã kết nối Zalo\" rồi gửi mã vào đây để gộp sổ và cho đại lý thuế xem giúp."));
       }
     }

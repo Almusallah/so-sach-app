@@ -91,6 +91,24 @@ section { margin-top: 56px; }
 .how-card h3 { margin: 12px 0 8px; font-size: 17.5px; }
 .how-card p { margin: 0; font-size: 13.8px; color: var(--grigio); line-height: 1.6; }
 
+/* ---- Ba cách ghi doanh thu ------------------------------------------------ */
+.ways-wrap { display: grid; grid-template-columns: 1.05fr .95fr; gap: 30px; align-items: center; }
+.ways-art { margin: 0; }
+.ways-art img { width: 100%; height: auto; display: block; border-radius: var(--r); background: var(--carta2); box-shadow: var(--ombra); }
+.ways-art figcaption { margin-top: 10px; font-size: 13px; color: var(--grigio); font-style: italic; text-align: center; }
+.ways-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; counter-reset: w; }
+.way { display: flex; gap: 14px; background: #fff; border: 1px solid var(--bordo); border-radius: var(--r); padding: 16px 18px; box-shadow: var(--ombra); transition: transform .18s, box-shadow .18s; }
+.way:hover { transform: translateY(-2px); box-shadow: var(--ombra-md); }
+.way-ico { flex: 0 0 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; background: linear-gradient(150deg, #e6f5ee, #d3ecdf); font-size: 20px; }
+.way h3 { margin: 0 0 5px; font-size: 16.5px; }
+.way p { margin: 0 0 8px; font-size: 13.6px; color: var(--grigio); line-height: 1.6; }
+.way p b { color: var(--giada-scuro); background: #e9f5ef; padding: 1px 6px; border-radius: 6px; font-weight: 700; }
+.way-tag { font-size: 11px; font-weight: 800; letter-spacing: .04em; padding: 3px 9px; border-radius: 999px; display: inline-block; }
+.way-tag.ok { background: #e2f3ea; color: var(--giada-scuro); }
+.way-tag.soon { background: #f6ecd6; color: #8a6412; }
+.ways-note { margin: 22px 0 0; padding: 14px 18px; background: var(--carta2); border-radius: var(--r); font-size: 13.6px; color: var(--testo); line-height: 1.65; }
+@media (max-width: 860px) { .ways-wrap { grid-template-columns: 1fr; gap: 22px; } }
+
 /* ---- App ---- */
 .app-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .panel { background: #fff; border: 1px solid var(--bordo); border-radius: 20px; padding: 22px; box-shadow: var(--ombra); }
