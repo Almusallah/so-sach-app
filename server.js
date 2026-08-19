@@ -14,7 +14,7 @@ import {
 } from "./src/tax.js";
 import { extractReceipt, extractionMode } from "./src/extract.js";
 import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage, formatQuarterMessage, tokenStatus } from "./src/zalo.js";
-import { matchCommand, menuText, welcomeText } from "./src/commands.js";
+import { matchCommand, menuText } from "./src/commands.js";
 import { buildDeclaration } from "./src/declaration.js";
 import { bootstrapFromEnv, exchangeOaCode } from "./src/zalo_token.js";
 import { initStore, storeMode, books, accounts, leads, getBook, persistBook, persistAccount, persistLead, removeBook } from "./src/store.js";
@@ -131,16 +131,14 @@ app.post("/webhooks/zalo", express.raw({ type: "*/*", limit: "1mb" }), (req, res
 async function handleZaloEvent(event) {
   try {
     const uid = event?.sender?.id || "zalo-unknown";
-    // Chi tocca "Quan tâm" sull'OA prima d'oggi non riceveva nulla: restava
-    // davanti a una chat vuota senza sapere che si può fotografare uno
-    // scontrino. Il momento in cui qualcuno segue è l'unico in cui si ha la
-    // sua attenzione garantita — sprecarlo è il modo più caro di perdere un
-    // utente acquisito.
-    if (event.event_name === "follow") {
-      await sendText(uid, welcomeText());
-      await sendText(uid, menuText({ linked: !!findAccountByZaloId(uid) }));
-      return;
-    }
+    // NIENTE risposta al "follow": ci pensa Zalo. Il benvenuto è configurato
+    // nell'OA Manager (Thiết lập tương tác → Tin nhắn chào mừng) e arriva come
+    // scheda ricca — immagine, titolo, pulsante — senza dipendere dal nostro
+    // webhook. Rispondere anche qui darebbe a ogni nuovo utente TRE messaggi
+    // di fila. La barra menu persistente (Thanh menu) resta sempre visibile
+    // sotto la chat, quindi l'elenco dei comandi non serve ripeterlo subito.
+    // ⚠️ Se un giorno si spegne "Tin nhắn chào mừng" nell'OA Manager, il primo
+    //    contatto torna muto: riattivare questo ramo, non solo il toggle.
     if (event.event_name === "user_send_image") {
       const url = event?.message?.attachments?.[0]?.payload?.url;
       // Zalo consegna i dati utente COMPLETI solo a IP vietnamiti (policy dal

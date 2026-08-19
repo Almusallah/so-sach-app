@@ -73,6 +73,11 @@ export function menuText({ linked = false } = {}) {
   );
 }
 
+// ⚠️ NON più inviato dal codice. Il benvenuto vive nell'OA Manager
+// (Thiết lập tương tác → Tin nhắn chào mừng), dove arriva come scheda ricca e
+// non dipende dal nostro webhook. Questo testo resta come SORGENTE di quella
+// configurazione: se si riscrive il messaggio su Zalo, si riscrive qui, così
+// fra sei mesi si sa ancora cosa dice il primo messaggio che riceve un hộ.
 export function welcomeText() {
   return (
     "Chào bạn 👋 Mình là Sổ Sạch — trợ lý ghi sổ cho hộ kinh doanh.\n\n" +

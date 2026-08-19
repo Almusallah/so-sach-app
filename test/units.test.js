@@ -354,7 +354,7 @@ test("declaredRevenue: la tờ khai sa dire quanta parte non ha una foto dietro"
 });
 
 // ---- Comandi del bot --------------------------------------------------------
-import { matchCommand, normalize, menuText, welcomeText, COMMANDS } from "../src/commands.js";
+import { matchCommand, normalize, menuText, COMMANDS } from "../src/commands.js";
 import { buildDeclaration, deadlineFor } from "../src/declaration.js";
 import { formatQuarterMessage, formatEntryMessage, vnDate } from "../src/zalo.js";
 
@@ -379,7 +379,7 @@ test("il menu elenca DAVVERO ogni comando esistente", () => {
 
 test("nessun testo del bot promette più un totale MENSILE", () => {
   const entry = { type: "chi", amount: 30000, date: "2026-08-10", counterparty: "JMART", description: "x" };
-  for (const t of [menuText(), welcomeText(), formatEntryMessage(entry)]) {
+  for (const t of [menuText(), formatEntryMessage(entry)]) {
     assert.ok(!/tổng kết tháng/i.test(t), "promette ancora il mese: " + t.slice(0, 60));
   }
 });
