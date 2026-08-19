@@ -5,16 +5,24 @@
 //  prodotto è dimostrabile end-to-end anche prima di collegare la chiave.
 // ============================================================================
 import { createHash } from "node:crypto";
+import { todayVN, normalizeReceiptDate } from "./vndate.js";
 
 const API_KEY = process.env.ANTHROPIC_API_KEY || null;
 const MODEL = process.env.EXTRACT_MODEL || "claude-haiku-4-5-20251001";
 
-const SCHEMA_PROMPT = `Bạn là trợ lý kế toán cho hộ kinh doanh Việt Nam. Nhìn ảnh hoá đơn/biên lai và trả về JSON DUY NHẤT theo mẫu:
+// Il prompt riceve la data di OGGI: senza, il modello non ha modo di capire
+// che una data futura è impossibile, e su uno scontrino vietnamita stampato
+// "10/08/2026" (10 agosto, DD/MM) torna volentieri come 8 ottobre.
+const schemaPrompt = (today) => `Bạn là trợ lý kế toán cho hộ kinh doanh Việt Nam. Nhìn ảnh hoá đơn/biên lai và trả về JSON DUY NHẤT theo mẫu:
 {"type":"thu"|"chi","amount":<số tiền VND, số nguyên>,"date":"YYYY-MM-DD","counterparty":"<tên cửa hàng/khách>","description":"<mô tả ngắn>","confidence":<0-1>}
-"thu" = tiền vào (bán hàng), "chi" = tiền ra (mua nguyên liệu, chi phí). Nếu không chắc ngày, dùng hôm nay. Chỉ JSON, không giải thích.`;
+"thu" = tiền vào (bán hàng), "chi" = tiền ra (mua nguyên liệu, chi phí).
+NGÀY: hoá đơn Việt Nam in theo thứ tự NGÀY/THÁNG/NĂM (ví dụ 10/08/2026 = ngày 10 tháng 8). Hôm nay là ${today}; ngày trên hoá đơn KHÔNG BAO GIỜ ở tương lai. Nếu không đọc được ngày, dùng ${today}.
+SỐ TIỀN: lấy TỔNG CỘNG phải trả, chỉ chữ số, không dấu chấm.
+Chỉ JSON, không giải thích.`;
 
 // ---- Claude vision ---------------------------------------------------------
 async function extractWithClaude(imageBase64, mediaType) {
+  const today = todayVN();
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -29,7 +37,7 @@ async function extractWithClaude(imageBase64, mediaType) {
         role: "user",
         content: [
           { type: "image", source: { type: "base64", media_type: mediaType, data: imageBase64 } },
-          { type: "text", text: SCHEMA_PROMPT },
+          { type: "text", text: schemaPrompt(today) },
         ],
       }],
     }),
@@ -39,7 +47,57 @@ async function extractWithClaude(imageBase64, mediaType) {
   const text = (data.content || []).map((b) => b.text || "").join("");
   const m = text.match(/\{[\s\S]*\}/);
   if (!m) throw new Error("no JSON in model output");
-  return { ...JSON.parse(m[0]), engine: "claude" };
+  return validate(JSON.parse(m[0]), today);
+}
+
+// Quello che torna dal modello NON è ancora una scrittura contabile: finché
+// non è validato è testo. Un importo assurdo o un tipo mancante devono far
+// FALLIRE l'estrazione — il bot chiede di rifare la foto — non entrare nel
+// libro come se fosse un dato letto davvero.
+const MAX_VND = 100_000_000_000; // 100 tỷ: nessuno scontrino di un hộ kinh doanh
+// In Việt Nam un totale sotto i 1.000đ non esiste. Serve da rete: se il
+// parsing sbaglia di 1000× (vedi sotto) il numero cade qui e l'estrazione
+// fallisce, invece di entrare nel libro come voce buona.
+const MIN_VND = 1_000;
+
+// Il punto più pericoloso del file. In Việt Nam il separatore delle MIGLIAIA
+// è il PUNTO: "30.000" sono trentamila đồng. `Number("30.000")` fa 30 — cioè
+// un errore di mille volte, scritto nel libro con la stessa faccia di un dato
+// letto bene. E i centesimi di đồng non esistono, quindi un eventuale gruppo
+// decimale finale (1-2 cifre) si scarta invece di interpretarlo.
+export function parseVndAmount(v) {
+  if (typeof v === "number") return Number.isFinite(v) ? Math.round(v) : NaN;
+  let s = String(v ?? "").replace(/[^\d.,-]/g, "");
+  if (!s) return NaN;
+  const neg = s.startsWith("-");
+  s = s.replace(/-/g, "");
+  const dec = /[.,](\d{1,2})$/.exec(s);
+  if (dec) s = s.slice(0, -dec[0].length);
+  s = s.replace(/[.,]/g, "");
+  if (!s) return NaN;
+  const n = Number(s);
+  return Number.isFinite(n) ? (neg ? -n : n) : NaN;
+}
+
+export function validate(raw, today = todayVN()) {
+  const type = raw?.type === "thu" || raw?.type === "chi" ? raw.type : null;
+  if (!type) throw new Error(`bad type: ${JSON.stringify(raw?.type)}`);
+
+  const amount = parseVndAmount(raw?.amount);
+  if (!Number.isFinite(amount) || amount < MIN_VND || amount >= MAX_VND) {
+    throw new Error(`bad amount: ${JSON.stringify(raw?.amount)}`);
+  }
+
+  const { date, dateNote } = normalizeReceiptDate(raw?.date, today);
+  const conf = Number(raw?.confidence);
+
+  return {
+    type, amount, date, dateNote,
+    counterparty: String(raw?.counterparty || "").trim().slice(0, 120),
+    description: String(raw?.description || "").trim().slice(0, 200),
+    confidence: Number.isFinite(conf) ? Math.min(1, Math.max(0, conf)) : 0.6,
+    engine: "claude",
+  };
 }
 
 // ---- Estrattore demo deterministico -----------------------------------------
@@ -62,7 +120,7 @@ function extractDemo(imageBase64) {
   return {
     type: pick[1],
     amount,
-    date: new Date().toISOString().slice(0, 10),
+    date: todayVN(),
     counterparty: pick[0],
     description: pick[3],
     confidence: 0.5,
@@ -72,13 +130,13 @@ function extractDemo(imageBase64) {
 
 // ---- API principale ----------------------------------------------------------
 export async function extractReceipt(imageBase64, mediaType = "image/jpeg") {
-  if (API_KEY) {
-    try {
-      return await extractWithClaude(imageBase64, mediaType);
-    } catch (e) {
-      console.error("extract: claude failed, falling back to demo:", e.message);
-    }
-  }
+  // ⚠️ NIENTE fallback demo quando la chiave c'è. Il demo inventa un fornitore
+  // plausibile ("Chợ Bến Thành - sạp rau") con un importo plausibile: se
+  // sostituisse un'estrazione fallita, l'utente riceverebbe una voce FALSA
+  // scritta con la stessa sicurezza di una vera, e la scoprirebbe solo alla
+  // dichiarazione. Meglio un errore onesto: chi chiama gestisce l'eccezione
+  // e chiede di rifare la foto.
+  if (API_KEY) return extractWithClaude(imageBase64, mediaType);
   return extractDemo(imageBase64);
 }
 

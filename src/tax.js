@@ -4,6 +4,7 @@
 //  README (Circ. 40/2021/TT-BTC per le aliquote %, Decreto 70/2025 e riforma
 //  2026 per le soglie). Vanno validate con un đại lý thuế prima dell'uso reale.
 // ============================================================================
+import { todayVN } from "./vndate.js";
 
 // Soglie 2026 (VND / anno) — configurabili via env per aggiornamenti rapidi.
 export const THRESHOLDS = {
@@ -41,19 +42,37 @@ export const CATEGORIES = {
   },
 };
 
-// Trimestre corrente da una data.
+// "2026-04-01" è una DATA DI CALENDARIO, non un istante: non ha fuso orario.
+// `new Date("2026-04-01").getMonth()` la interpreta come mezzanotte UTC e poi
+// la rilegge nel fuso del processo — a ovest di Greenwich diventa il 31 marzo,
+// cioè il trimestre PRECEDENTE, e il 1° gennaio scivola nell'ANNO precedente.
+// Su un prodotto che compila la 01/CNKD è una dichiarazione sbagliata, quindi
+// i campi si leggono dalla stringa e basta.
+const ymd = (v) => {
+  if (v instanceof Date) return todayVN(v);            // un istante → giorno vietnamita
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || ""));
+  return m ? m[0] : null;
+};
+export const partsOf = (v) => {
+  const d = ymd(v);
+  return d ? { year: +d.slice(0, 4), month: +d.slice(5, 7), day: +d.slice(8, 10) } : null;
+};
+
+// Trimestre corrente da una data (Date = adesso, oppure "YYYY-MM-DD").
 export function quarterOf(date = new Date()) {
-  const q = Math.floor(date.getMonth() / 3) + 1;
-  return { q, year: date.getFullYear(), label: `Q${q}/${date.getFullYear()}` };
+  const p = partsOf(date) || partsOf(new Date());
+  const q = Math.floor((p.month - 1) / 3) + 1;
+  return { q, year: p.year, label: `Q${q}/${p.year}` };
 }
 
 // Aggregati di un elenco voci {type:'thu'|'chi', amount, date}.
 export function totals(entries, { year, q } = {}) {
   let revenue = 0, expenses = 0;
   for (const e of entries) {
-    const d = new Date(e.date);
-    if (year && d.getFullYear() !== year) continue;
-    if (q && Math.floor(d.getMonth() / 3) + 1 !== q) continue;
+    const p = partsOf(e.date);
+    if (!p) continue;
+    if (year && p.year !== year) continue;
+    if (q && Math.floor((p.month - 1) / 3) + 1 !== q) continue;
     if (e.type === "thu") revenue += e.amount;
     else expenses += e.amount;
   }
@@ -62,8 +81,9 @@ export function totals(entries, { year, q } = {}) {
 
 // Proiezione annua dai ricavi year-to-date.
 export function projectAnnual(revenueYTD, now = new Date()) {
-  const start = new Date(now.getFullYear(), 0, 1);
-  const daysElapsed = Math.max(1, Math.round((now - start) / 86400000));
+  const today = ymd(now);
+  const start = Date.UTC(+today.slice(0, 4), 0, 1);
+  const daysElapsed = Math.max(1, Math.round((Date.parse(today + "T00:00:00Z") - start) / 86400000) + 1);
   return Math.round((revenueYTD / daysElapsed) * 365);
 }
 

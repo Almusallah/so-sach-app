@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import {
   THRESHOLDS, CATEGORIES, totals, projectAnnual, quarterlyTax,
-  thresholdStatus, quarterOf, nextDeadline,
+  thresholdStatus, quarterOf, nextDeadline, partsOf,
 } from "./src/tax.js";
 import { extractReceipt, extractionMode } from "./src/extract.js";
 import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage, tokenStatus } from "./src/zalo.js";
@@ -20,6 +20,7 @@ import { register, login, publicAccount, findAgentByCode, findAccountByZaloId, c
 import { PLANS, payosEnabled, createPaymentLink, verifyPayosWebhook, activateSub, subActive } from "./src/billing.js";
 import { sosachScore } from "./src/score.js";
 import { parseMoneyCommand } from "./src/amount.js";
+import { todayVN } from "./src/vndate.js";
 import { sampleEntries, SAMPLE_PROFILE } from "./src/sample.js";
 import { demoAgency } from "./src/demo_agency.js";
 
@@ -208,7 +209,7 @@ async function handleZaloEvent(event) {
             id: "e" + Date.now(),
             type: cmd.type,
             amount: cmd.amount,
-            date: new Date().toISOString().slice(0, 10),
+            date: todayVN(),
             counterparty: cmd.type === "thu" ? "Khách lẻ" : "",
             description: cmd.type === "thu" ? "Tổng bán trong ngày" : "Ghi tay",
             source: "zalo",
@@ -430,16 +431,17 @@ app.post("/api/extract", rateLimit({ windowMs: 15 * 60_000, max: 15, globalMax: 
 function ledgerPayload(uid) {
   const b = getBook(uid);
   const now = new Date();
-  const year = now.getFullYear();
-  const { q } = quarterOf(now);
+  const { q, year } = quarterOf(now);   // anno e trimestre VIETNAMITI, non del server
   const tYear = totals(b.entries, { year });
   const tQuarter = totals(b.entries, { year, q });
   const projection = projectAnnual(tYear.revenue, now);
   // Serie mensile per il grafico cash-flow (anno corrente).
   const monthly = Array.from({ length: 12 }, () => ({ thu: 0, chi: 0 }));
   for (const e of b.entries) {
-    const d = new Date(e.date);
-    if (d.getFullYear() === year) monthly[d.getMonth()][e.type === "thu" ? "thu" : "chi"] += e.amount;
+    // Stessa trappola di totals(): "2026-01-01" letto come istante sparirebbe
+    // dal grafico a ovest di Greenwich. Si leggono i campi dalla stringa.
+    const p = partsOf(e.date);
+    if (p && p.year === year) monthly[p.month - 1][e.type === "thu" ? "thu" : "chi"] += e.amount;
   }
   return {
     profile: b.profile,
@@ -465,7 +467,7 @@ app.post("/api/ledger", (req, res) => {
   const entry = {
     id: "e" + Date.now() + Math.random().toString(36).slice(2, 6),
     type, amount: Math.round(Number(amount)),
-    date: date || new Date().toISOString().slice(0, 10),
+    date: date || todayVN(),
     counterparty: String(counterparty || "").slice(0, 120),
     description: String(description || "").slice(0, 200),
     source: "web", createdAt: new Date().toISOString(),
@@ -568,7 +570,7 @@ app.get("/api/export.csv", (req, res) => {
   }
   const csv = "﻿" + rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\r\n");
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
-  res.setHeader("Content-Disposition", `attachment; filename="so-sach-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.setHeader("Content-Disposition", `attachment; filename="so-sach-${todayVN()}.csv"`);
   res.send(csv);
 });
 
@@ -588,6 +590,8 @@ app.get("/api/declaration", (req, res) => {
   res.json({
     form: "01/CNKD (Thông tư 40/2021/TT-BTC) — BẢN NHÁP / DRAFT",
     period: `Quý ${q} năm ${year}`,
+    generatedAt: todayVN(),
+    deadline: nextDeadline().deadline,
     taxpayer: b.profile.name || "—",
     category: { key: b.profile.category, vi: cat.vi, en: cat.en },
     revenue: t.revenue,

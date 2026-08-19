@@ -294,9 +294,20 @@ footer a { color: var(--giada); font-weight: 600; }
   .ring { width: 84px; min-width: 84px; height: 84px; }
 }
 @media print {
-  .topbar, .hero, .strip, #how, .zalo-banner, footer, .panel, .toast { display: none !important; }
-  .modal-bg { position: static; display: block !important; background: none; }
-  .modal { box-shadow: none; max-width: none; animation: none; }
+  /* Si stampa UNA cosa sola: il foglio. Elencare le sezioni da nascondere è
+     una lista che si rompe ogni volta che si aggiunge una sezione al sito —
+     #ways finiva dentro il PDF della dichiarazione. Quindi si inverte: si
+     spegne tutto e si riaccende solo la dichiarazione. */
+  @page { size: A4; margin: 16mm; }
+  body > *:not(.modal-bg) { display: none !important; }
+  body { background: #fff; }
+  .modal-bg { position: static !important; display: block !important; background: none; padding: 0; }
+  .modal { box-shadow: none; max-width: none; animation: none; border-radius: 0; }
+  /* I bottoni non hanno senso su carta e finivano stampati sotto il totale. */
+  .modal .btn, .toast, #dClose { display: none !important; }
+  /* I browser non stampano gli sfondi: l'intestazione deve reggere in bianco. */
+  .modal-head { background: none !important; color: #123; border-bottom: 2px solid #123; }
+  .decl table { page-break-inside: avoid; }
 }
 
 /* ---- account layer (near-final) ---- */

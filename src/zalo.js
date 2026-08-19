@@ -129,10 +129,19 @@ export async function fetchImageBase64(url) {
 }
 
 // Formatta la conferma voce per il messaggio di risposta del bot.
+// Quando la data è stata corretta o indovinata l'utente DEVE saperlo: è
+// l'unico che ha lo scontrino in mano, e una data sbagliata sposta la voce
+// nel trimestre sbagliato della 01/CNKD.
+const DATE_NOTE_VI = {
+  swapped: "⚠️ Hoá đơn ghi ngày/tháng — mình hiểu là ngày trên. Sai thì trả lời \"sửa\".",
+  guessed: "⚠️ Mình không đọc rõ ngày nên tạm lấy hôm nay. Sai thì trả lời \"sửa\".",
+};
+
 export function formatEntryMessage(entry, lang = "vi") {
   const vnd = (n) => n.toLocaleString("vi-VN") + "đ";
   if (lang === "vi") {
-    return `✅ Đã ghi vào Sổ Sạch:\n${entry.type === "thu" ? "📈 THU" : "📉 CHI"} ${vnd(entry.amount)}\n${entry.counterparty || ""} — ${entry.description || ""}\nNgày: ${entry.date}\n\nTrả lời "sửa" nếu cần chỉnh, "sổ" để xem tổng kết tháng.`;
+    const note = DATE_NOTE_VI[entry.dateNote];
+    return `✅ Đã ghi vào Sổ Sạch:\n${entry.type === "thu" ? "📈 THU" : "📉 CHI"} ${vnd(entry.amount)}\n${entry.counterparty || ""} — ${entry.description || ""}\nNgày: ${entry.date}\n${note ? note + "\n" : ""}\nTrả lời "sửa" nếu cần chỉnh, "sổ" để xem tổng kết tháng.`;
   }
   return `✅ Recorded in Sổ Sạch:\n${entry.type === "thu" ? "📈 IN" : "📉 OUT"} ${vnd(entry.amount)}\n${entry.counterparty || ""} — ${entry.description || ""}\nDate: ${entry.date}`;
 }

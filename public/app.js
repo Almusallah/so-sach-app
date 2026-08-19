@@ -164,6 +164,8 @@ const I18N = {
   leg_thu: { vi: "Thu", en: "In" },
   leg_chi: { vi: "Chi", en: "Out" },
   decl_title: { vi: "Tờ khai thuế quý — BẢN NHÁP", en: "Quarterly tax declaration — DRAFT" },
+  d_made: { vi: "Ngày lập", en: "Prepared on" },
+  d_due: { vi: "Hạn nộp tờ khai", en: "Filing deadline" },
   d_period: { vi: "Kỳ tính thuế", en: "Tax period" },
   d_taxpayer: { vi: "Người nộp thuế", en: "Taxpayer" },
   d_cat: { vi: "Ngành nghề", en: "Category" },
@@ -470,12 +472,14 @@ async function openDeclaration() {
       <h4>${d.form}</h4>
       <div class="sub">${d.period}</div>
       <table>
+        <tr><td>${T("d_made")}</td><td>${d.generatedAt || ""}</td></tr>
         <tr><td>${T("d_taxpayer")}</td><td><b>${d.taxpayer}</b></td></tr>
         <tr><td>${T("d_cat")}</td><td>${LANG === "vi" ? d.category.vi : d.category.en}</td></tr>
         <tr><td>${T("d_rev")}</td><td><b>${vnd(d.revenue)}</b></td></tr>
         <tr><td>${T("d_vat", { r: pr(d.rates.vat) })}</td><td>${vnd(d.vat)}</td></tr>
         <tr><td>${T("d_pit", { r: pr(d.rates.pit) })}</td><td>${vnd(d.pit)}</td></tr>
         <tr class="tot"><td>${T("d_tot")}</td><td>${vnd(d.total)}</td></tr>
+        <tr><td>${T("d_due")}</td><td><b>${d.deadline || ""}</b></td></tr>
       </table>
       ${d.exempt ? `<div class="conf-note">${d.exemptNote}</div>` : ""}
       ${d.agent ? `<div class="conf-note">🧑‍💼 ${LANG === "vi" ? "Đại lý thuế của bạn" : "Your tax agent"}: <b>${d.agent.name}</b> (${d.agent.phone})</div>` : ""}
