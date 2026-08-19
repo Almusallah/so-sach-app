@@ -352,3 +352,97 @@ test("declaredRevenue: la tờ khai sa dire quanta parte non ha una foto dietro"
   assert.equal(totals(b.entries, { year: 2026, q: 3 }).revenue, 1000);
   assert.equal(declaredRevenue(b.entries, { year: 2026, q: 3 }), 300);
 });
+
+// ---- Comandi del bot --------------------------------------------------------
+import { matchCommand, normalize, menuText, welcomeText, COMMANDS } from "../src/commands.js";
+import { buildDeclaration, deadlineFor } from "../src/declaration.js";
+import { formatQuarterMessage, formatEntryMessage, vnDate } from "../src/zalo.js";
+
+test("matchCommand: i vietnamiti scrivono spesso senza segni diacritici", () => {
+  for (const t of ["sổ", "SỔ", "so", " Sô ", "Sổ Sạch", "tổng kết"]) assert.equal(matchCommand(t), "year", t);
+  for (const t of ["quý", "QUY", "quy", "Quý này", "thuế"]) assert.equal(matchCommand(t), "quarter", t);
+  for (const t of ["menu", "giúp", "GIUP", "help", "?", "hướng dẫn", "làm gì"]) assert.equal(matchCommand(t), "menu", t);
+});
+
+test("matchCommand: non intercetta ciò che non è un comando", () => {
+  for (const t of ["thu 2tr4", "chi 500k", "xin chào", "", "  ", "A1B2C3", "500000"])
+    assert.equal(matchCommand(t), null, JSON.stringify(t));
+});
+
+test("il menu elenca DAVVERO ogni comando esistente", () => {
+  // La regressione da evitare: il testo di aiuto che promette qualcosa che il
+  // router non fa (prometteva "tổng kết tháng" e restituiva l'anno).
+  const txt = menuText();
+  for (const c of COMMANDS) assert.ok(txt.includes(c.label_vi), `manca dal menu: ${c.key}`);
+  assert.ok(txt.includes('"quý"') && txt.includes('"sổ"') && txt.includes('"menu"'));
+});
+
+test("nessun testo del bot promette più un totale MENSILE", () => {
+  const entry = { type: "chi", amount: 30000, date: "2026-08-10", counterparty: "JMART", description: "x" };
+  for (const t of [menuText(), welcomeText(), formatEntryMessage(entry)]) {
+    assert.ok(!/tổng kết tháng/i.test(t), "promette ancora il mese: " + t.slice(0, 60));
+  }
+});
+
+test("vnDate: le date si mostrano all'italiana/vietnamita, non in ISO", () => {
+  assert.equal(vnDate("2026-10-31"), "31/10/2026");
+  assert.equal(vnDate("2026-01-05"), "05/01/2026");
+  assert.equal(vnDate("boh"), "boh");
+});
+
+test("deadlineFor: ogni trimestre, non solo quello in corso", () => {
+  assert.equal(deadlineFor(2026, 1), "2026-04-30");
+  assert.equal(deadlineFor(2026, 2), "2026-07-31");
+  assert.equal(deadlineFor(2026, 3), "2026-10-31");
+  assert.equal(deadlineFor(2026, 4), "2027-01-31", "il Q4 scade a gennaio dell'anno dopo");
+});
+
+test('il comando "quý" risponde con quello che serve per depositare', () => {
+  const book = { profile: { name: "Quán Cô Ba", category: "services_goods" }, entries: [] };
+  for (let d = 0; d < 40; d++) {
+    book.entries.push({ id: "e" + d, type: "thu", amount: 30_000_000,
+      date: `2026-07-${String((d % 30) + 1).padStart(2, "0")}`, provenance: "photo" });
+  }
+  const msg = formatQuarterMessage(buildDeclaration(book, { now: new Date("2026-08-19T00:00:00Z") }));
+  assert.match(msg, /Quý 3\/2026/);
+  assert.match(msg, /Thu:/);
+  assert.match(msg, /Thuế tạm tính/, "sopra soglia → deve mostrare l'imposta");
+  assert.match(msg, /GTGT 3%/);
+  assert.match(msg, /TNCN 1,5%/, "virgola decimale, non punto");
+  assert.match(msg, /31\/10\/2026/, "la scadenza in formato vietnamita");
+  assert.match(msg, /đại lý thuế/, "e il rimando al professionista");
+});
+
+test('"quý" per un esente dice ESENTE ma ricorda la dichiarazione', () => {
+  const book = { profile: { name: "Quán nhỏ", category: "services_goods" }, entries: [
+    { id: "a", type: "thu", amount: 5_000_000, date: "2026-07-10", provenance: "photo" }] };
+  const msg = formatQuarterMessage(buildDeclaration(book, { now: new Date("2026-08-19T00:00:00Z") }));
+  assert.match(msg, /dưới ngưỡng 1 tỷ/);
+  assert.match(msg, /VẪN phải nộp tờ khai/, "esente non vuol dire niente da fare");
+  assert.ok(!/Thuế tạm tính/.test(msg), "non deve mostrare un'imposta che non è dovuta");
+});
+
+test('"quý" dichiara quanta parte del ricavo è solo autodichiarata', () => {
+  const book = { profile: { category: "services_goods" }, entries: [] };
+  applyOpening(book, { year: 2026, quarters: { 3: { revenue: 200_000_000 } } }, TODAY);
+  book.entries.push({ id: "p", type: "thu", amount: 50_000_000, date: "2026-08-01", provenance: "photo" });
+  const msg = formatQuarterMessage(buildDeclaration(book, { now: new Date("2026-08-19T00:00:00Z") }));
+  assert.match(msg, /tự khai, chưa có chứng từ/);
+});
+
+test("buildDeclaration: la rotta HTTP e il bot calcolano la stessa cosa", () => {
+  // Non è un test cosmetico: due implementazioni della stessa dichiarazione
+  // fiscale divergono, e l'hộ deposita cifre diverse a seconda di dove guarda.
+  const book = { profile: { name: "X", category: "distribution" }, entries: [
+    { id: "1", type: "thu", amount: 900_000_000, date: "2026-07-05", provenance: "photo" },
+    { id: "2", type: "chi", amount: 100_000_000, date: "2026-08-05", provenance: "photo" }] };
+  const d = buildDeclaration(book, { year: 2026, q: 3, now: new Date("2026-08-19T00:00:00Z") });
+  assert.equal(d.revenue, 900_000_000);
+  assert.equal(d.expenses, 100_000_000);
+  assert.equal(d.rates.vat, 0.01);
+  assert.equal(d.vat, 9_000_000);
+  assert.equal(d.pit, 4_500_000);
+  assert.equal(d.total, 13_500_000);
+  assert.equal(d.deadline, "2026-10-31");
+  assert.match(d.form, /BẢN NHÁP/);
+});

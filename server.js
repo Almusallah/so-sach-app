@@ -13,7 +13,9 @@ import {
   thresholdStatus, quarterOf, nextDeadline, partsOf,
 } from "./src/tax.js";
 import { extractReceipt, extractionMode } from "./src/extract.js";
-import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage, tokenStatus } from "./src/zalo.js";
+import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage, formatQuarterMessage, tokenStatus } from "./src/zalo.js";
+import { matchCommand, menuText, welcomeText } from "./src/commands.js";
+import { buildDeclaration } from "./src/declaration.js";
 import { bootstrapFromEnv, exchangeOaCode } from "./src/zalo_token.js";
 import { initStore, storeMode, books, accounts, leads, getBook, persistBook, persistAccount, persistLead, removeBook } from "./src/store.js";
 import { register, login, publicAccount, findAgentByCode, findAccountByZaloId, createLinkCode, consumeLinkCode, authOptional, requireAuth, normalizePhone } from "./src/auth.js";
@@ -129,6 +131,16 @@ app.post("/webhooks/zalo", express.raw({ type: "*/*", limit: "1mb" }), (req, res
 async function handleZaloEvent(event) {
   try {
     const uid = event?.sender?.id || "zalo-unknown";
+    // Chi tocca "Quan tâm" sull'OA prima d'oggi non riceveva nulla: restava
+    // davanti a una chat vuota senza sapere che si può fotografare uno
+    // scontrino. Il momento in cui qualcuno segue è l'unico in cui si ha la
+    // sua attenzione garantita — sprecarlo è il modo più caro di perdere un
+    // utente acquisito.
+    if (event.event_name === "follow") {
+      await sendText(uid, welcomeText());
+      await sendText(uid, menuText({ linked: !!findAccountByZaloId(uid) }));
+      return;
+    }
     if (event.event_name === "user_send_image") {
       const url = event?.message?.attachments?.[0]?.payload?.url;
       // Zalo consegna i dati utente COMPLETI solo a IP vietnamiti (policy dal
@@ -186,11 +198,32 @@ async function handleZaloEvent(event) {
           `✅ Đã kết nối với tài khoản ${acct?.name || linkPhone}.\n` +
           (moved ? `Đã chuyển ${moved} bút toán từ Zalo vào sổ của bạn.\n` : "") +
           `Từ giờ sổ trên Zalo và trên web là một — đại lý thuế cũng xem được.`);
-      } else if (txt === "sổ" || txt === "so") {
+      } else if (matchCommand(rawText) === "year") {
         const b = getBook(zaloBookUid(uid));
         const now = new Date();
-        const t = totals(b.entries, { year: now.getFullYear() });
-        await sendText(uid, `📒 Sổ năm ${now.getFullYear()}:\nThu: ${t.revenue.toLocaleString("vi-VN")}đ\nChi: ${t.expenses.toLocaleString("vi-VN")}đ\nLãi gộp: ${t.net.toLocaleString("vi-VN")}đ`);
+        const { year } = quarterOf(now);
+        const t = totals(b.entries, { year });
+        const st = thresholdStatus(projectAnnual(t.revenue, now));
+        const vnd = (n) => n.toLocaleString("vi-VN") + "đ";
+        const left = Math.max(0, st.taxFree.limit - st.projection);
+        await sendText(uid,
+          `📒 Sổ năm ${year}\n\n` +
+          `Thu:      ${vnd(t.revenue)}\n` +
+          `Chi:      ${vnd(t.expenses)}\n` +
+          `Lãi gộp:  ${vnd(t.net)}\n\n` +
+          `Dự kiến cả năm: ${vnd(st.projection)}\n` +
+          (st.taxFree.crossed
+            ? `⚠️ Đã vượt ngưỡng 1 tỷ — quý này phải nộp thuế. Gõ "quý" để xem số.`
+            : `✅ Còn ${vnd(left)} nữa mới tới ngưỡng 1 tỷ.`) +
+          `\n\nGõ "quý" để xem quý này và hạn nộp tờ khai.`);
+      } else if (matchCommand(rawText) === "quarter") {
+        // La domanda che il prodotto esiste per rispondere: la 01/CNKD si
+        // deposita per TRIMESTRE, e finora sul canale dove vive il cliente
+        // questa era l'unica cosa che non si poteva chiedere.
+        const b = getBook(zaloBookUid(uid));
+        await sendText(uid, formatQuarterMessage(buildDeclaration(b)));
+      } else if (matchCommand(rawText) === "menu") {
+        await sendText(uid, menuText({ linked: !!findAccountByZaloId(uid) }));
       } else if (parseMoneyCommand(rawText)) {
         // Il totale di fine giornata scritto a mano: la via principale per il
         // FATTURATO di un quán, dove le foto funzionano solo per le spese.
@@ -223,14 +256,7 @@ async function handleZaloEvent(event) {
           await sendText(uid, formatEntryMessage(entry));
         }
       } else {
-        const linked = !!findAccountByZaloId(uid);
-        await sendText(uid,
-          "Chào bạn! Có 3 cách ghi sổ:\n" +
-          "📸 Chụp hoá đơn — mình đọc và ghi giúp\n" +
-          "📝 Chụp tờ giấy ghi tay cuối ngày cũng được\n" +
-          "⌨️ Hoặc gõ nhanh: \"thu 2tr4\" · \"chi 500k\"\n\n" +
-          "Gõ \"sổ\" để xem tổng kết." +
-          (linked ? "" : "\n\n💡 Có tài khoản trên web? Vào phần Tài khoản → \"Lấy mã kết nối Zalo\" rồi gửi mã vào đây để gộp sổ và cho đại lý thuế xem giúp."));
+        await sendText(uid, menuText({ linked: !!findAccountByZaloId(uid) }));
       }
     }
   } catch (e) { console.error("zalo webhook:", e.message); }
@@ -577,39 +603,10 @@ app.get("/api/export.csv", (req, res) => {
 
 // ---- Tờ khai 01/CNKD --------------------------------------------------------------
 app.get("/api/declaration", (req, res) => {
-  const uid = uidFor(req);
-  const b = getBook(uid);
-  const now = new Date();
-  const year = Number(req.query.year || now.getFullYear());
-  const q = Number(req.query.q || quarterOf(now).q);
-  const t = totals(b.entries, { year, q });
-  const tYear = totals(b.entries, { year });
-  const projection = projectAnnual(tYear.revenue, now);
-  const tax = quarterlyTax(t.revenue, b.profile.category, projection);
-  const cat = CATEGORIES[b.profile.category];
+  const b = getBook(uidFor(req));
+  const d = buildDeclaration(b, { year: req.query.year, q: req.query.q });
   const agent = req.account?.agentPhone ? accounts[req.account.agentPhone] : null;
-  res.json({
-    form: "01/CNKD (Thông tư 40/2021/TT-BTC) — BẢN NHÁP / DRAFT",
-    period: `Quý ${q} năm ${year}`,
-    generatedAt: todayVN(),
-    deadline: nextDeadline().deadline,
-    taxpayer: b.profile.name || "—",
-    category: { key: b.profile.category, vi: cat.vi, en: cat.en },
-    revenue: t.revenue,
-    // Quanta parte del ricavo è solo DICHIARATA: chi firma la tờ khai ha il
-    // diritto di sapere quale pezzo non ha una foto dietro.
-    declaredRevenue: declaredRevenue(b.entries, { year, q }),
-    rates: tax.rates,
-    vat: tax.vat,
-    pit: tax.pit,
-    total: tax.total,
-    exempt: tax.exempt,
-    exemptNote: tax.exempt
-      ? "Doanh thu dự kiến cả năm dưới ngưỡng chịu thuế — vẫn phải nộp tờ khai."
-      : null,
-    agent: agent ? { name: agent.name, phone: agent.phone } : null,
-    disclaimer: "Bản nháp do Sổ Sạch soạn. Kiểm tra với đại lý thuế trước khi nộp. / Draft prepared by Sổ Sạch — verify with a licensed tax agent before filing.",
-  });
+  res.json({ ...d, agent: agent ? { name: agent.name, phone: agent.phone } : null });
 });
 
 // ---- Số dư đầu kỳ (chi arriva a metà anno) ---------------------------------

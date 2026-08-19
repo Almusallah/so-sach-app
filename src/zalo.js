@@ -129,6 +129,46 @@ export async function fetchImageBase64(url) {
 }
 
 // Formatta la conferma voce per il messaggio di risposta del bot.
+// Data vietnamita: 31/10/2026, non 2026-10-31. In una chat con una signora
+// del mercato la forma ISO è rumore.
+export const vnDate = (iso) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso || "");
+};
+
+const vnd = (n) => Number(n || 0).toLocaleString("vi-VN") + "đ";
+
+// Il trimestre in un messaggio: è la domanda che il prodotto esiste per
+// rispondere, perché la 01/CNKD si deposita per TRIMESTRE.
+export function formatQuarterMessage(d) {
+  const L = [
+    `📊 Quý ${d.quarter}/${d.year} — tính đến ${vnDate(d.generatedAt)}`,
+    ``,
+    `Thu:      ${vnd(d.revenue)}`,
+    `Chi:      ${vnd(d.expenses)}`,
+    `Lãi gộp:  ${vnd(d.net)}`,
+  ];
+  if (d.declaredRevenue) {
+    L.push(`(trong đó ${vnd(d.declaredRevenue)} là tự khai, chưa có chứng từ)`);
+  }
+  L.push(``);
+  if (d.exempt) {
+    L.push(`✅ Doanh thu dự kiến cả năm ${vnd(d.projection)} — dưới ngưỡng 1 tỷ.`);
+    L.push(`Quý này chưa phải nộp thuế, nhưng VẪN phải nộp tờ khai.`);
+  } else {
+    L.push(`Thuế tạm tính: ${vnd(d.total)}`);
+    // In Việt Nam il separatore decimale è la VIRGOLA: "1,5%", non "1.5%".
+    const pct = (r) => (r * 100).toFixed(1).replace(".0", "").replace(".", ",");
+    L.push(`  • GTGT ${pct(d.rates.vat)}%: ${vnd(d.vat)}`);
+    L.push(`  • TNCN ${pct(d.rates.pit)}%: ${vnd(d.pit)}`);
+  }
+  L.push(``);
+  L.push(`🗓️ Hạn nộp tờ khai: ${vnDate(d.deadline)}`);
+  L.push(``);
+  L.push(`Bản nháp — kiểm tra với đại lý thuế trước khi nộp.`);
+  return L.join("\n");
+}
+
 // Quando la data è stata corretta o indovinata l'utente DEVE saperlo: è
 // l'unico che ha lo scontrino in mano, e una data sbagliata sposta la voce
 // nel trimestre sbagliato della 01/CNKD.
@@ -141,7 +181,7 @@ export function formatEntryMessage(entry, lang = "vi") {
   const vnd = (n) => n.toLocaleString("vi-VN") + "đ";
   if (lang === "vi") {
     const note = DATE_NOTE_VI[entry.dateNote];
-    return `✅ Đã ghi vào Sổ Sạch:\n${entry.type === "thu" ? "📈 THU" : "📉 CHI"} ${vnd(entry.amount)}\n${entry.counterparty || ""} — ${entry.description || ""}\nNgày: ${entry.date}\n${note ? note + "\n" : ""}\nTrả lời "sửa" nếu cần chỉnh, "sổ" để xem tổng kết tháng.`;
+    return `✅ Đã ghi vào Sổ Sạch:\n${entry.type === "thu" ? "📈 THU" : "📉 CHI"} ${vnd(entry.amount)}\n${entry.counterparty || ""} — ${entry.description || ""}\nNgày: ${entry.date}\n${note ? note + "\n" : ""}\nTrả lời "sửa" nếu cần chỉnh · "quý" xem quý này · "menu" xem tất cả.`;
   }
   return `✅ Recorded in Sổ Sạch:\n${entry.type === "thu" ? "📈 IN" : "📉 OUT"} ${vnd(entry.amount)}\n${entry.counterparty || ""} — ${entry.description || ""}\nDate: ${entry.date}`;
 }
