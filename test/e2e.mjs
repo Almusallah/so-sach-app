@@ -132,6 +132,53 @@ try {
   const y25 = (await api("/api/declaration?year=2025&q=3")).body;
   check("l'anno scorso resta vuoto", () => assert.equal(y25.revenue, 0));
 
+  // --- 5b. số dư đầu kỳ, contro il server vero ---------------------------
+  const phone2 = "0901" + String(Date.now()).slice(-6);
+  const savedTok = token;
+  token = (await api("/api/auth/register", { method: "POST",
+    body: JSON.stringify({ phone: phone2, pin: "135791", name: "Quán Mới Mở Sổ" }) })).body.token;
+  await api("/api/profile", { method: "POST", body: JSON.stringify({ category: "services_goods" }) });
+
+  // Un mese di registrazioni vere per un quán da 120 triệu/mese.
+  for (let d = 0; d < 25; d++) {
+    await api("/api/ledger", { method: "POST", body: JSON.stringify({
+      type: "thu", amount: 4_800_000, date: `2026-08-${String(d + 1).padStart(2, "0")}`,
+      counterparty: "Khách lẻ", description: "Tổng bán trong ngày" }) });
+  }
+  const naive = (await api("/api/ledger")).body;
+  check("libro vuoto a metà anno → il prodotto crede che sia sotto soglia", () =>
+    assert.equal(naive.thresholds.taxFree.crossed, false));
+
+  const op = await api("/api/opening", { method: "POST", body: JSON.stringify({
+    year: 2026, quarters: { 1: { revenue: 360_000_000 }, 2: { revenue: 360_000_000 }, 3: { revenue: 120_000_000 } } }) });
+  check("apertura accettata senza scarti", () => {
+    assert.equal(op.status, 200);
+    assert.deepEqual(op.body.skipped, []);
+    assert.equal(op.body.entries, 3);
+  });
+  const fixed = op.body.ledger;
+  check("con l'apertura il quán risulta correttamente SOPRA la soglia", () =>
+    assert.equal(fixed.thresholds.taxFree.crossed, true));
+  check("l'apertura non regala punteggio", () =>
+    assert.ok(fixed.score.score <= naive.score.score + 2,
+      `${naive.score.score} → ${fixed.score.score}`));
+
+  const dq1 = (await api("/api/declaration?year=2026&q=1")).body;
+  check("il Q1 dichiarato produce una tờ khai compilabile", () => {
+    assert.equal(dq1.revenue, 360_000_000);
+    assert.equal(dq1.declaredRevenue, 360_000_000, "e dice che è tutto autodichiarato");
+    assert.equal(dq1.exempt, false, "sopra soglia → non esente");
+  });
+  const dq3 = (await api("/api/declaration?year=2026&q=3")).body;
+  check("il Q3 mescola dichiarato e documentato, e li distingue", () => {
+    assert.equal(dq3.revenue, 120_000_000 + 25 * 4_800_000);
+    assert.equal(dq3.declaredRevenue, 120_000_000);
+  });
+  const reread = await api("/api/opening?year=2026");
+  check("le aperture si rileggono per il form", () =>
+    assert.equal(reread.body.quarters[2].revenue, 360_000_000));
+  token = savedTok;
+
   // --- 6. export --------------------------------------------------------
   // fetch().text() TOGLIE il BOM: va letto sui byte, o il test è finto.
   const csvBytes = new Uint8Array(await (await fetch(BASE + "/api/export.csv", { headers: { authorization: "Bearer " + token } })).arrayBuffer());

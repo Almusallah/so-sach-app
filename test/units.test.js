@@ -244,3 +244,111 @@ test("sosachScore: resta dentro 0-100 e ha una lettera", () => {
   assert.ok(s.score >= 0 && s.score <= 100);
   assert.ok(["A", "B", "C", "D"].includes(s.grade));
 });
+
+// ---- Số dư đầu kỳ (chi arriva a metà anno) ----------------------------------
+import { applyOpening, openingOf, openingDate, declaredRevenue } from "../src/opening.js";
+
+const freshBook = () => ({ profile: { category: "services_goods" }, entries: [] });
+
+test("openingDate: trimestri chiusi al loro ultimo giorno, quello in corso a oggi", () => {
+  assert.equal(openingDate(2026, 1, TODAY), "2026-03-31");
+  assert.equal(openingDate(2026, 2, TODAY), "2026-06-30");
+  assert.equal(openingDate(2026, 3, TODAY), TODAY, "Q3 è in corso il 19/08 → oggi, non 30/09 (sarebbe futuro)");
+  assert.equal(openingDate(2026, 4, TODAY), null, "Q4 non è ancora cominciato");
+  assert.equal(openingDate(2025, 4, TODAY), "2025-12-31", "anno chiuso → fine trimestre");
+});
+
+test("applyOpening: IL BUG — chi si iscrive ad agosto non deve risultare esente", () => {
+  // Quán da 120 triệu/mese = 1,44 tỷ l'anno: SOPRA la soglia del miliardo.
+  const perMonth = 120_000_000;
+  const b = freshBook();
+  // Un mese di registrazioni vere, tutto il resto in bianco.
+  for (let d = 0; d < 25; d++) {
+    b.entries.push({ id: "e" + d, type: "thu", amount: Math.round(perMonth / 25),
+      date: `2026-08-${String(d + 1).padStart(2, "0")}`, provenance: "photo" });
+  }
+  const now = new Date("2026-08-19T00:00:00Z");
+  const before = projectAnnual(totals(b.entries, { year: 2026 }).revenue, now);
+  assert.ok(before < 1_000_000_000, `senza apertura proietta ${before} → dice esente`);
+
+  applyOpening(b, { year: 2026, quarters: {
+    1: { revenue: perMonth * 3 }, 2: { revenue: perMonth * 3 }, 3: { revenue: perMonth } } }, TODAY);
+
+  const after = projectAnnual(totals(b.entries, { year: 2026 }).revenue, now);
+  assert.ok(after > 1_000_000_000, `con l'apertura proietta ${after} → correttamente NON esente`);
+  assert.equal(thresholdStatus(after).taxFree.crossed, true);
+});
+
+test("applyOpening: le cifre finiscono nel trimestre giusto", () => {
+  const b = freshBook();
+  applyOpening(b, { year: 2026, quarters: { 1: { revenue: 100 }, 2: { revenue: 200 }, 3: { revenue: 300 } } }, TODAY);
+  assert.equal(totals(b.entries, { year: 2026, q: 1 }).revenue, 100);
+  assert.equal(totals(b.entries, { year: 2026, q: 2 }).revenue, 200);
+  assert.equal(totals(b.entries, { year: 2026, q: 3 }).revenue, 300);
+});
+
+test("applyOpening: SOSTITUISCE, non accumula — e non tocca gli altri trimestri", () => {
+  const b = freshBook();
+  applyOpening(b, { year: 2026, quarters: { 1: { revenue: 100 }, 2: { revenue: 200 } } }, TODAY);
+  applyOpening(b, { year: 2026, quarters: { 2: { revenue: 999 } } }, TODAY);
+  assert.equal(totals(b.entries, { year: 2026, q: 2 }).revenue, 999, "Q2 corretto, non 200+999");
+  assert.equal(totals(b.entries, { year: 2026, q: 1 }).revenue, 100, "Q1 dichiarato prima resta");
+});
+
+test("applyOpening: 0 cancella l'apertura", () => {
+  const b = freshBook();
+  applyOpening(b, { year: 2026, quarters: { 1: { revenue: 100, expenses: 50 } } }, TODAY);
+  assert.equal(b.entries.length, 2);
+  applyOpening(b, { year: 2026, quarters: { 1: { revenue: 0, expenses: 0 } } }, TODAY);
+  assert.equal(b.entries.length, 0);
+});
+
+test("applyOpening: un trimestre futuro viene rifiutato E segnalato, mai ignorato", () => {
+  const b = freshBook();
+  const out = applyOpening(b, { year: 2026, quarters: { 4: { revenue: 500 } } }, TODAY);
+  assert.equal(out.entries, 0);
+  assert.deepEqual(out.skipped, [{ q: 4, why: "quarter is in the future" }]);
+});
+
+test("applyOpening: anno assurdo → errore, non un libro corrotto", () => {
+  for (const year of [2030, 1999, "abc", null, 20.5]) {
+    assert.ok(applyOpening(freshBook(), { year, quarters: { 1: { revenue: 1 } } }, TODAY).error, `year=${year}`);
+  }
+});
+
+test("le aperture sono 'declared' e NON fanno punteggio", () => {
+  const b = freshBook();
+  applyOpening(b, { year: 2026, quarters: {
+    1: { revenue: 500_000_000 }, 2: { revenue: 500_000_000 } } }, TODAY);
+  assert.ok(b.entries.every((e) => e.provenance === "declared" && e.source === "opening"));
+  const s = sosachScore(b, new Date("2026-08-19T00:00:00Z"));
+  assert.ok(s.score <= 25, `un anno dichiarato non compra un punteggio: ${s.score}`);
+});
+
+test("il punteggio guarda solo le voci con prova", () => {
+  const withProof = freshBook(), declaredOnly = freshBook();
+  for (let d = 0; d < 60; d++) {
+    const date = new Date(Date.UTC(2026, 5, 1) + d * 86400000).toISOString().slice(0, 10);
+    withProof.entries.push({ id: "p" + d, type: d % 4 ? "thu" : "chi", amount: 500_000, date,
+      counterparty: "Khách lẻ", description: "Bán hàng", provenance: "photo" });
+  }
+  applyOpening(declaredOnly, { year: 2026, quarters: { 1: { revenue: 1_000_000_000 } } }, TODAY);
+  const now = new Date("2026-08-19T00:00:00Z");
+  assert.ok(sosachScore(withProof, now).score > sosachScore(declaredOnly, now).score + 30,
+    "chi documenta deve staccare nettamente chi dichiara");
+});
+
+test("openingOf: rilegge quello che c'è, per ri-mostrarlo nel form", () => {
+  const b = freshBook();
+  applyOpening(b, { year: 2026, quarters: { 1: { revenue: 100, expenses: 40 }, 2: { revenue: 200 } } }, TODAY);
+  assert.deepEqual(openingOf(b, 2026), { 1: { revenue: 100, expenses: 40 }, 2: { revenue: 200, expenses: 0 } });
+  assert.deepEqual(openingOf(b, 2025), {}, "un altro anno non si mescola");
+});
+
+test("declaredRevenue: la tờ khai sa dire quanta parte non ha una foto dietro", () => {
+  const b = freshBook();
+  applyOpening(b, { year: 2026, quarters: { 3: { revenue: 300 } } }, TODAY);
+  b.entries.push({ id: "x", type: "thu", amount: 700, date: TODAY, provenance: "photo" });
+  assert.equal(totals(b.entries, { year: 2026, q: 3 }).revenue, 1000);
+  assert.equal(declaredRevenue(b.entries, { year: 2026, q: 3 }), 300);
+});

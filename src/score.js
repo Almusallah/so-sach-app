@@ -18,7 +18,13 @@ const clamp01 = (x) => Math.min(1, Math.max(0, x));
 const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
 
 export function sosachScore(book, now = new Date()) {
-  const entries = book.entries || [];
+  // ⚠️ Le aperture portate da fuori (`provenance:"declared"`) NON entrano nel
+  //    punteggio. Sono la parola dell'hộ, non una prova: se contassero, chi
+  //    arriva dichiarando un anno d'oro partirebbe con la A senza aver mai
+  //    fotografato niente, e il punteggio smetterebbe di misurare l'unica cosa
+  //    che un istituto di credito compra — il registrato, non il raccontato.
+  //    Restano invece nei totali e nella tờ khai: lì servono, e sono corretti.
+  const entries = (book.entries || []).filter((e) => e.provenance !== "declared");
   const year = now.getFullYear();
 
   // 1) Nề nếp ghi sổ (30đ) — DENSITÀ, non semplice presenza: giorni distinti

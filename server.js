@@ -21,6 +21,7 @@ import { PLANS, payosEnabled, createPaymentLink, verifyPayosWebhook, activateSub
 import { sosachScore } from "./src/score.js";
 import { parseMoneyCommand } from "./src/amount.js";
 import { todayVN } from "./src/vndate.js";
+import { applyOpening, openingOf, declaredRevenue } from "./src/opening.js";
 import { sampleEntries, SAMPLE_PROFILE } from "./src/sample.js";
 import { demoAgency } from "./src/demo_agency.js";
 
@@ -595,6 +596,9 @@ app.get("/api/declaration", (req, res) => {
     taxpayer: b.profile.name || "—",
     category: { key: b.profile.category, vi: cat.vi, en: cat.en },
     revenue: t.revenue,
+    // Quanta parte del ricavo è solo DICHIARATA: chi firma la tờ khai ha il
+    // diritto di sapere quale pezzo non ha una foto dietro.
+    declaredRevenue: declaredRevenue(b.entries, { year, q }),
     rates: tax.rates,
     vat: tax.vat,
     pit: tax.pit,
@@ -606,6 +610,24 @@ app.get("/api/declaration", (req, res) => {
     agent: agent ? { name: agent.name, phone: agent.phone } : null,
     disclaimer: "Bản nháp do Sổ Sạch soạn. Kiểm tra với đại lý thuế trước khi nộp. / Draft prepared by Sổ Sạch — verify with a licensed tax agent before filing.",
   });
+});
+
+// ---- Số dư đầu kỳ (chi arriva a metà anno) ---------------------------------
+// Senza queste cifre `projectAnnual()` legge i mesi in bianco come mesi senza
+// incassi e dice "miễn thuế" a chi ha già superato il miliardo — vedi
+// src/opening.js per il conto completo.
+app.get("/api/opening", (req, res) => {
+  const year = Number(req.query.year) || Number(todayVN().slice(0, 4));
+  res.json({ ok: true, year, quarters: openingOf(getBook(uidFor(req)), year) });
+});
+
+app.post("/api/opening", (req, res) => {
+  const uid = uidFor(req);
+  const b = getBook(uid);
+  const out = applyOpening(b, req.body || {}, todayVN());
+  if (out.error) return res.status(400).json({ error: out.error });
+  persistBook(uid);
+  res.json({ ok: true, ...out, ledger: ledgerPayload(uid) });
 });
 
 // ---- Đại lý thuế (agent) dashboard -------------------------------------------------

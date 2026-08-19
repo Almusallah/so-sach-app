@@ -310,6 +310,14 @@ footer a { color: var(--giada); font-weight: 600; }
   .decl table { page-break-inside: avoid; }
 }
 
+/* ---- số dư đầu kỳ ---- */
+.op-table{width:100%;border-collapse:collapse;margin:12px 0}
+.op-table th{font-size:.78rem;color:#7c8a83;font-weight:700;text-align:left;padding:0 6px 6px}
+.op-table td{padding:4px 6px;vertical-align:middle}
+.op-table td:first-child{white-space:nowrap;font-size:.92rem}
+.op-table input{width:100%;padding:8px 10px;border:1px solid #e4e9e6;border-radius:10px;font:inherit;text-align:right}
+.op-table .muted{color:#7c8a83;font-weight:400;font-size:.8rem}
+
 /* ---- account layer (near-final) ---- */
 .hidden{display:none!important}
 #acctArea{display:inline-flex;align-items:center;gap:8px}

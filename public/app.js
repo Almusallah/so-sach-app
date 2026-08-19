@@ -166,6 +166,19 @@ const I18N = {
   decl_title: { vi: "Tờ khai thuế quý — BẢN NHÁP", en: "Quarterly tax declaration — DRAFT" },
   d_made: { vi: "Ngày lập", en: "Prepared on" },
   d_due: { vi: "Hạn nộp tờ khai", en: "Filing deadline" },
+  d_declared: { vi: "Trong đó tự khai (chưa có chứng từ)", en: "Of which self-declared (no document)" },
+  op_btn: { vi: "📗 Tôi đã ghi sổ theo cách khác", en: "📗 I already keep books elsewhere" },
+  op_title: { vi: "Số dư đầu kỳ — mang sổ cũ sang", en: "Opening balances — bring your old book across" },
+  op_why: {
+    vi: "Sổ Sạch tính ngưỡng 1 tỷ theo doanh thu <b>cả năm</b>. Nếu bạn bắt đầu giữa năm với sổ trống, phần mềm sẽ tưởng những tháng trước bạn không bán gì — và báo miễn thuế trong khi thực tế bạn đã vượt ngưỡng. Điền doanh thu từng quý theo sổ cũ (quyển tay, Excel, phần mềm khác) là đủ.",
+    en: "Sổ Sạch measures the 1 billion threshold on <b>annual</b> revenue. Start mid-year with an empty book and it reads the earlier months as no trading — and tells you you're exempt when you have in fact crossed. Enter each quarter's revenue from your old book (notebook, Excel, another app)." },
+  op_note: {
+    vi: "Các số này được ghi là <b>tự khai</b>: dùng cho tờ khai và ngưỡng thuế, nhưng <b>không tính vào Điểm Sổ Sạch</b> — điểm chỉ tính những gì có chứng từ, kể từ hôm nay.",
+    en: "These are recorded as <b>self-declared</b>: they count for the declaration and the threshold, but <b>not</b> towards your Sổ Sạch Score — the score only counts evidenced entries, from today onward." },
+  op_rev: { vi: "Doanh thu", en: "Revenue" },
+  op_exp: { vi: "Chi phí", en: "Expenses" },
+  op_save: { vi: "Lưu số dư đầu kỳ", en: "Save opening balances" },
+  op_saved: { vi: "Đã lưu số dư đầu kỳ.", en: "Opening balances saved." },
   d_period: { vi: "Kỳ tính thuế", en: "Tax period" },
   d_taxpayer: { vi: "Người nộp thuế", en: "Taxpayer" },
   d_cat: { vi: "Ngành nghề", en: "Category" },
@@ -480,6 +493,7 @@ async function openDeclaration() {
         <tr><td>${T("d_pit", { r: pr(d.rates.pit) })}</td><td>${vnd(d.pit)}</td></tr>
         <tr class="tot"><td>${T("d_tot")}</td><td>${vnd(d.total)}</td></tr>
         <tr><td>${T("d_due")}</td><td><b>${d.deadline || ""}</b></td></tr>
+        ${d.declaredRevenue ? `<tr><td>${T("d_declared")}</td><td>${vnd(d.declaredRevenue)}</td></tr>` : ""}
       </table>
       ${d.exempt ? `<div class="conf-note">${d.exemptNote}</div>` : ""}
       ${d.agent ? `<div class="conf-note">🧑‍💼 ${LANG === "vi" ? "Đại lý thuế của bạn" : "Your tax agent"}: <b>${d.agent.name}</b> (${d.agent.phone})</div>` : ""}
@@ -491,6 +505,48 @@ async function openDeclaration() {
       </div>
     </div>`);
   $("#dClose").addEventListener("click", closeModal);
+}
+
+// ---- Số dư đầu kỳ ----------------------------------------------------------------
+async function openOpening() {
+  const year = new Date().getFullYear();
+  const cur = await api(`/api/opening${Q ? Q + "&" : "?"}year=${year}`);
+  const nowQ = Math.floor(new Date().getMonth() / 3) + 1;
+  const row = (q) => {
+    const v = cur.quarters?.[q] || {};
+    return `<tr>
+      <td><b>Q${q}/${year}</b>${q === nowQ ? ` <span class="muted">(${LANG === "vi" ? "đang diễn ra" : "in progress"})</span>` : ""}</td>
+      <td><input type="text" inputmode="numeric" id="opR${q}" value="${v.revenue || ""}" placeholder="${T("op_rev")}" /></td>
+      <td><input type="text" inputmode="numeric" id="opE${q}" value="${v.expenses || ""}" placeholder="${T("op_exp")}" /></td>
+    </tr>`;
+  };
+  showModal(`
+    <div class="modal-head">${T("op_title")}</div>
+    <div class="modal-body">
+      <p class="sub">${T("op_why")}</p>
+      <table class="op-table">
+        <tr><th></th><th>${T("op_rev")} (đ)</th><th>${T("op_exp")} (đ)</th></tr>
+        ${Array.from({ length: nowQ }, (_, i) => row(i + 1)).join("")}
+      </table>
+      <div class="conf-note">${T("op_note")}</div>
+      <div style="display:flex;gap:9px;margin-top:14px">
+        <button class="btn solid block" id="opSave">${T("op_save")}</button>
+        <button class="btn ghost block" id="opClose">${T("d_close")}</button>
+      </div>
+    </div>`);
+  $("#opClose").addEventListener("click", closeModal);
+  $("#opSave").addEventListener("click", async () => {
+    const quarters = {};
+    for (let q = 1; q <= nowQ; q++) {
+      // I punti sono separatori di MIGLIAIA in Việt Nam: vanno tolti, non letti
+      // come decimali, o "30.000" diventa 30 (lo stesso bug degli scontrini).
+      const num = (id) => Number(String($(id).value || "").replace(/[^0-9]/g, "")) || 0;
+      quarters[q] = { revenue: num(`#opR${q}`), expenses: num(`#opE${q}`) };
+    }
+    await api("/api/opening" + Q, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ year, quarters }) });
+    closeModal(); toast(T("op_saved")); await refresh();
+  });
 }
 
 // ---- Wiring ----------------------------------------------------------------------
@@ -530,6 +586,7 @@ async function init() {
     if (r.ok) { $("#manualForm").reset(); toast(T("saved")); refresh(); }
   });
   $("#declBtn").addEventListener("click", openDeclaration);
+  $("#openingBtn").addEventListener("click", openOpening);
   $("#waitlistBtn")?.addEventListener("click", waitlistModal);
   $("#modalBg").addEventListener("click", (e) => { if (e.target.id === "modalBg") closeModal(); });
   $("#langBtn").addEventListener("click", () => {
