@@ -28,21 +28,23 @@ from reportlab.lib.enums import TA_JUSTIFY, TA_CENTER
 from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
                                 KeepTogether)
 from reportlab.lib.colors import HexColor
-from deck_kit import GIADA, GOLD, INK, MUTED, BORDER, CARTA_DK, WHITE  # registra anche i font
+# mono_kit registra Avenir Next e i colori: un contratto è il posto dove il
+# colore serve meno di tutti, quindi qui il sistema monocromo va da sé.
+from mono_kit import INK, GREY, GREY_L, RULE, WASH, WHITE
 
-H1 = ParagraphStyle("H1", fontName="SS-Serif-Bold", fontSize=17, leading=21,
-                    textColor=GIADA, alignment=TA_CENTER, spaceAfter=2)
-H2 = ParagraphStyle("H2", fontName="SS-Sans", fontSize=9.5, leading=13,
-                    textColor=MUTED, alignment=TA_CENTER, spaceAfter=14)
-ART = ParagraphStyle("ART", fontName="SS-Sans-Bold", fontSize=10, leading=13,
-                     textColor=GIADA, spaceBefore=9, spaceAfter=3)
-BODY = ParagraphStyle("BODY", fontName="SS-Sans", fontSize=9.3, leading=13.2,
+H1 = ParagraphStyle("H1", fontName="AV-Bd", fontSize=18, leading=22,
+                    textColor=INK, alignment=TA_CENTER, spaceAfter=3)
+H2 = ParagraphStyle("H2", fontName="AV", fontSize=9.5, leading=13,
+                    textColor=GREY, alignment=TA_CENTER, spaceAfter=14)
+ART = ParagraphStyle("ART", fontName="AV-Db", fontSize=9.8, leading=13,
+                     textColor=INK, spaceBefore=10, spaceAfter=3)
+BODY = ParagraphStyle("BODY", fontName="AV", fontSize=9.2, leading=13.6,
                       textColor=INK, alignment=TA_JUSTIFY, spaceAfter=4)
 SUB = ParagraphStyle("SUB", parent=BODY, leftIndent=13, spaceAfter=3)
 PARTY = ParagraphStyle("PARTY", parent=BODY, leftIndent=13, spaceAfter=3, alignment=0)
-NOTE = ParagraphStyle("NOTE", fontName="SS-Sans-It", fontSize=8.2, leading=11.5,
-                      textColor=MUTED, alignment=TA_JUSTIFY)
-SIGN = ParagraphStyle("SIGN", fontName="SS-Sans", fontSize=9, leading=13, textColor=INK)
+NOTE = ParagraphStyle("NOTE", fontName="AV-It", fontSize=8.2, leading=11.5,
+                      textColor=GREY, alignment=TA_JUSTIFY)
+SIGN = ParagraphStyle("SIGN", fontName="AV", fontSize=9, leading=13, textColor=INK)
 
 
 def art(n, heading, *paras):
@@ -62,8 +64,8 @@ def signature_block(it):
         [Paragraph(f"<b>{lab[0]}</b>", SIGN), Paragraph(f"<b>{lab[1]}</b>", SIGN)],
         [Paragraph(who, SIGN), Paragraph("_________________________________", SIGN)],
         [Paragraph("_________________________________", SIGN), Paragraph("_________________________________", SIGN)],
-        [Paragraph(f"<font size=7.5 color='#5f6a5f'>{lab[2]}</font>", SIGN),
-         Paragraph(f"<font size=7.5 color='#5f6a5f'>{lab[3]}</font>", SIGN)],
+        [Paragraph(f"<font size=7.5 color='#767676'>{lab[2]}</font>", SIGN),
+         Paragraph(f"<font size=7.5 color='#767676'>{lab[3]}</font>", SIGN)],
     ], colWidths=[82 * mm, 82 * mm])
     t.setStyle(TableStyle([("TOPPADDING", (0, 0), (-1, -1), 7),
                            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
@@ -434,9 +436,14 @@ def english():
 
 def stamp_page(canv, doc):
     canv.saveState()
-    canv.setFillColor(MUTED); canv.setFont("SS-Sans", 7.5)
-    canv.drawString(23 * mm, 12 * mm, "Sổ Sạch — Accordo di riservatezza / Non-Disclosure Agreement")
-    canv.drawRightString(A4[0] - 23 * mm, 12 * mm, "%d" % doc.page)
+    canv.setStrokeColor(RULE); canv.setLineWidth(0.5)
+    canv.line(23 * mm, 16 * mm, A4[0] - 23 * mm, 16 * mm)
+    to = canv.beginText(23 * mm, 11 * mm)
+    to.setFont("AV", 6.8); to.setCharSpace(1.0); to.setFillColor(GREY_L)
+    to.textOut("SỔ SẠCH — ACCORDO DI RISERVATEZZA / NON-DISCLOSURE AGREEMENT")
+    canv.drawText(to)
+    canv.setFillColor(GREY_L); canv.setFont("AV-Db", 7.2)
+    canv.drawRightString(A4[0] - 23 * mm, 11 * mm, "%02d" % doc.page)
     canv.restoreState()
 
 

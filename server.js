@@ -13,8 +13,8 @@ import {
   thresholdStatus, quarterOf, nextDeadline, partsOf,
 } from "./src/tax.js";
 import { extractReceipt, extractionMode } from "./src/extract.js";
-import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage, formatQuarterMessage, tokenStatus } from "./src/zalo.js";
-import { matchCommand, menuText } from "./src/commands.js";
+import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage, formatQuarterMessage, tokenStatus, vnDate } from "./src/zalo.js";
+import { matchCommand, menuText, parseKhaiCommand } from "./src/commands.js";
 import { buildDeclaration } from "./src/declaration.js";
 import { bootstrapFromEnv, exchangeOaCode } from "./src/zalo_token.js";
 import { initStore, storeMode, books, accounts, leads, getBook, persistBook, persistAccount, persistLead, removeBook } from "./src/store.js";
@@ -23,7 +23,7 @@ import { PLANS, payosEnabled, createPaymentLink, verifyPayosWebhook, activateSub
 import { sosachScore } from "./src/score.js";
 import { parseMoneyCommand } from "./src/amount.js";
 import { todayVN } from "./src/vndate.js";
-import { applyOpening, openingOf, declaredRevenue } from "./src/opening.js";
+import { applyOpening, openingOf, declaredRevenue, latestCorrectable } from "./src/opening.js";
 import { sampleEntries, SAMPLE_PROFILE } from "./src/sample.js";
 import { demoAgency } from "./src/demo_agency.js";
 
@@ -196,6 +196,89 @@ async function handleZaloEvent(event) {
           `✅ Đã kết nối với tài khoản ${acct?.name || linkPhone}.\n` +
           (moved ? `Đã chuyển ${moved} bút toán từ Zalo vào sổ của bạn.\n` : "") +
           `Từ giờ sổ trên Zalo và trên web là một — đại lý thuế cũng xem được.`);
+      } else if (matchCommand(rawText) === "fix") {
+        // "sửa" era promesso in OGNI conferma di registrazione («Trả lời
+        // "sửa" nếu cần chỉnh») e non instradato: chi lo digitava riceveva il
+        // menu. Chỉnh = cancella l'ultima voce e invita a rimandarla — molto
+        // più robusto di un editor via chat.
+        const bookUid = zaloBookUid(uid);
+        const b = getBook(bookUid);
+        const i = latestCorrectable(b.entries);
+        if (!b.entries.length) {
+          await sendText(uid,
+            `Sổ của bạn chưa có bút toán nào để sửa.\n` +
+            `Gửi ảnh hoá đơn hoặc gõ "thu 2tr4" / "chi 500k" để bắt đầu nhé.`);
+        } else if (i === -1) {
+          // solo aperture dichiarate: si correggono ri-dichiarando, non cancellando
+          await sendText(uid,
+            `Sổ của bạn chỉ có số liệu tự khai, không có bút toán nào để sửa.\n` +
+            `Muốn chỉnh số tự khai, gõ "khai" để xem cách khai lại.`);
+        } else {
+          const gone = b.entries.splice(i, 1)[0];
+          persistBook(bookUid);
+          const vnd = (n) => Number(n || 0).toLocaleString("vi-VN") + "đ";
+          await sendText(uid,
+            `🗑️ Đã xoá bút toán gần nhất:\n` +
+            `${gone.type === "thu" ? "📈 THU" : "📉 CHI"} ${vnd(gone.amount)}\n` +
+            (gone.counterparty ? `${gone.counterparty}\n` : "") +
+            `Ngày: ${vnDate(gone.date)}\n\n` +
+            `Bạn gửi lại ảnh hoá đơn hoặc gõ lại số tiền đúng nhé.`);
+        }
+      } else if (parseKhaiCommand(rawText)) {
+        // ⚠️ ORDINE: PRIMA di parseMoneyCommand. "khai quý 1 thu 360tr"
+        // contiene "thu <importo>" e il parser dei soldi lo registrerebbe come
+        // incasso di OGGI — l'esatto contrario di un saldo di apertura.
+        const k = parseKhaiCommand(rawText);
+        const vnd = (n) => Number(n || 0).toLocaleString("vi-VN") + "đ";
+        if (k.help) {
+          await sendText(uid,
+            `📥 Khai thu chi các quý trước\n\n` +
+            `Bạn mới dùng Sổ Sạch giữa năm? Hãy khai thu chi các quý trước, ` +
+            `nếu không những tháng chưa ghi sẽ bị tính như không bán được gì ` +
+            `và thuế cả năm sẽ sai.\n\n` +
+            `Cách gõ:\n` +
+            `• khai quý 1 thu 360tr\n` +
+            `• khai quý 2 thu 360tr chi 90tr\n` +
+            `• khai quý 1 thu 0 — xoá số đã khai\n\n` +
+            `Số tự khai được ghi riêng (chưa có chứng từ) và không được cộng Điểm Sổ Sạch.`);
+        } else {
+          const bookUid = zaloBookUid(uid);
+          const b = getBook(bookUid);
+          const now = new Date();
+          const { year } = quarterOf(now);
+          const res = applyOpening(b, { year, quarters: { [k.q]: { revenue: k.revenue, expenses: k.expenses } } });
+          if (res.error || res.skipped?.length) {
+            // un'apertura scartata in silenzio è il bug d'origine di opening.js:
+            // il motivo del rifiuto arriva fino all'utente, in vietnamita
+            const why = res.error || res.skipped[0]?.why || "";
+            await sendText(uid, `⛔ Chưa ghi được số tự khai.\n` + (
+              /future/.test(why)
+                ? `Quý ${k.q}/${year} chưa tới — chỉ khai được các quý đã qua hoặc quý hiện tại.`
+                : /1-4/.test(why)
+                  ? `Quý phải từ 1 đến 4 (bạn gõ quý ${k.q}).`
+                  : `Bạn kiểm tra lại cú pháp giúp mình: "khai quý 1 thu 360tr".`));
+          } else {
+            persistBook(bookUid);
+            const t = totals(b.entries, { year });
+            const st = thresholdStatus(projectAnnual(t.revenue, now));
+            const left = Math.max(0, st.taxFree.limit - st.projection);
+            const head = res.entries === 0
+              ? (res.replaced > 0
+                  ? `✅ Đã xoá số tự khai của Quý ${k.q}/${year}.`
+                  : `Quý ${k.q}/${year} chưa có số tự khai nào — không có gì để xoá.`)
+              : `✅ Đã ghi số tự khai cho Quý ${k.q}/${year}:\n` +
+                `📈 Thu: ${k.revenue > 0 ? vnd(k.revenue) : "0đ (đã xoá)"}` +
+                (k.hasChi ? `\n📉 Chi: ${k.expenses > 0 ? vnd(k.expenses) : "0đ (đã xoá)"}` : "") +
+                `\n(tự khai, chưa có chứng từ)`;
+            await sendText(uid,
+              head + `\n\n` +
+              `Dự kiến cả năm: ${vnd(st.projection)}\n` +
+              (st.taxFree.crossed
+                ? `⚠️ Đã vượt ngưỡng 1 tỷ — quý này phải nộp thuế. Gõ "quý" để xem số.`
+                : `✅ Còn ${vnd(left)} nữa mới tới ngưỡng 1 tỷ.`) +
+              `\n\n💡 Số tự khai không được cộng Điểm Sổ Sạch — điểm chỉ tính trên chứng từ thật.`);
+          }
+        }
       } else if (matchCommand(rawText) === "year") {
         const b = getBook(zaloBookUid(uid));
         const now = new Date();

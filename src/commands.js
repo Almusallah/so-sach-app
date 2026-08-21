@@ -7,6 +7,7 @@
 //  posti diversi divergono sempre. Qui la lista è il router E il menu: se un
 //  comando cambia, il testo cambia con lui.
 // ============================================================================
+import { parseAmount } from "./amount.js";
 
 // I vietnamiti scrivono spessissimo senza segni diacritici (tastiera, fretta,
 // telefono di qualcun altro): "sổ", "so", "SỔ" e "sô" devono valere uguale.
@@ -31,6 +32,21 @@ export const COMMANDS = [
     key: "money", pattern: true, icon: "⌨️",
     label_vi: 'Gõ nhanh: "thu 2tr4" · "chi 500k"',
     desc_vi: "thu = tiền bán, chi = tiền mua",
+  },
+  // `pattern` E `match` insieme: stanno nella sezione GHI SỔ del menu (sono
+  // azioni sul libro, non consultazioni) ma restano instradabili come parola
+  // esatta. "sửa" è PROMESSO in ogni conferma di registrazione da mesi: un
+  // comando promesso e non instradato è il bug che questo file esiste per
+  // impedire. Le forme sono POST-normalize (niente diacritici, đ→d).
+  {
+    key: "fix", pattern: true, match: ["sua", "xoa", "sua lai"], icon: "✏️",
+    label_vi: 'Gõ "sửa"',
+    desc_vi: "xoá bút toán vừa ghi nếu sai, rồi gửi lại",
+  },
+  {
+    key: "khai", pattern: true, match: ["khai"], icon: "📥",
+    label_vi: 'Gõ "khai"',
+    desc_vi: "mới dùng giữa năm? khai thu chi các quý trước",
   },
   {
     key: "quarter", match: ["quy", "quy nay", "thue"], icon: "📊",
@@ -57,6 +73,33 @@ export function matchCommand(raw) {
     if (c.match && c.match.includes(n)) return c.key;
   }
   return null;
+}
+
+// "khai" con argomenti NON può passare da matchCommand (che confronta parole
+// esatte): serve un parser. Vive qui e non in server.js perché è testabile da
+// solo, e perché in server.js DEVE girare PRIMA di parseMoneyCommand — "khai
+// quý 1 thu 360tr" contiene cifre e il parser dei soldi se lo mangerebbe.
+// Torna:
+//   null                             non è un comando khai
+//   { help: true }                   "khai" nudo o sintassi illeggibile →
+//                                    meglio rispiegare che indovinare un importo
+//   { q, revenue, expenses, hasChi } pronto per applyOpening; lo 0 è AMMESSO
+//                                    (nella semantica delle aperture 0 = cancella,
+//                                    per questo non basta parseAmount, che rifiuta 0)
+export function parseKhaiCommand(raw) {
+  const n = normalize(raw).replace(/\s+/g, " ");
+  if (n !== "khai" && !n.startsWith("khai ")) return null;
+  if (n === "khai") return { help: true };
+  const m = /^khai quy ?(\d+) thu (.+?)(?: chi (.+))?$/.exec(n);
+  if (!m) return { help: true };
+  // dopo normalize "0đ" è "0d": lo 0 esplicito si riconosce prima di parseAmount
+  const amt = (s) => (/^0+ ?(d|vnd)?$/.test(s) ? 0 : parseAmount(s));
+  const q = Number(m[1]);
+  const revenue = amt(m[2]);
+  const hasChi = m[3] !== undefined;
+  const expenses = hasChi ? amt(m[3]) : 0;
+  if (revenue === null || expenses === null) return { help: true };
+  return { q, revenue, expenses, hasChi };
 }
 
 export function menuText({ linked = false } = {}) {

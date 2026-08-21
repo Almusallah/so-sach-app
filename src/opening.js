@@ -97,6 +97,24 @@ export function openingOf(book, year) {
   return out;
 }
 
+// Indice dell'ultima voce che "sửa" può toccare, o -1. Vive qui perché il
+// confine da difendere è di questo modulo: le aperture (`provenance:
+// "declared"`) si correggono ri-dichiarando con "khai" — replace, non delete —
+// e un "sửa" che le cancellasse farebbe sparire un trimestre intero di
+// fatturato dalla proiezione, cioè il bug d'origine di questo file.
+// "Ultima" = max createdAt; a parità o senza createdAt decide l'ordine
+// d'arrivo nel libro (le voci vengono solo appese).
+export function latestCorrectable(entries) {
+  let best = -1;
+  for (let i = 0; i < (entries || []).length; i++) {
+    if (entries[i]?.provenance === "declared") continue;
+    if (best === -1 || String(entries[i].createdAt || "") >= String(entries[best].createdAt || "")) {
+      best = i;
+    }
+  }
+  return best;
+}
+
 // Quota di ricavi solo DICHIARATI in un periodo: la tờ khai deve poterlo dire.
 export function declaredRevenue(entries, { year, q } = {}) {
   let sum = 0;

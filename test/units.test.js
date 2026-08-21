@@ -246,7 +246,7 @@ test("sosachScore: resta dentro 0-100 e ha una lettera", () => {
 });
 
 // ---- Số dư đầu kỳ (chi arriva a metà anno) ----------------------------------
-import { applyOpening, openingOf, openingDate, declaredRevenue } from "../src/opening.js";
+import { applyOpening, openingOf, openingDate, declaredRevenue, latestCorrectable } from "../src/opening.js";
 
 const freshBook = () => ({ profile: { category: "services_goods" }, entries: [] });
 
@@ -354,7 +354,7 @@ test("declaredRevenue: la tờ khai sa dire quanta parte non ha una foto dietro"
 });
 
 // ---- Comandi del bot --------------------------------------------------------
-import { matchCommand, normalize, menuText, COMMANDS } from "../src/commands.js";
+import { matchCommand, normalize, menuText, COMMANDS, parseKhaiCommand } from "../src/commands.js";
 import { buildDeclaration, deadlineFor } from "../src/declaration.js";
 import { formatQuarterMessage, formatEntryMessage, vnDate } from "../src/zalo.js";
 
@@ -375,6 +375,10 @@ test("il menu elenca DAVVERO ogni comando esistente", () => {
   const txt = menuText();
   for (const c of COMMANDS) assert.ok(txt.includes(c.label_vi), `manca dal menu: ${c.key}`);
   assert.ok(txt.includes('"quý"') && txt.includes('"sổ"') && txt.includes('"menu"'));
+  // I due comandi nati dai difetti di agosto 2026: "sửa" era promesso in ogni
+  // conferma e assente dal menu, "khai" non esisteva affatto su Zalo.
+  assert.ok(txt.includes('"sửa"'), "il menu deve promettere sửa");
+  assert.ok(txt.includes('"khai"'), "il menu deve promettere khai");
 });
 
 test("nessun testo del bot promette più un totale MENSILE", () => {
@@ -445,4 +449,90 @@ test("buildDeclaration: la rotta HTTP e il bot calcolano la stessa cosa", () => 
   assert.equal(d.total, 13_500_000);
   assert.equal(d.deadline, "2026-10-31");
   assert.match(d.form, /BẢN NHÁP/);
+});
+
+// ---- "sửa": il comando promesso in ogni conferma e mai instradato -----------
+test('matchCommand: "sửa"/"xoá" in ogni grafia arrivano al comando fix', () => {
+  for (const t of ["sửa", "sua", "SỬA", " Sửa ", "xoá", "xóa", "xoa", "XOÁ", "sửa lại"])
+    assert.equal(matchCommand(t), "fix", t);
+});
+
+test('"sửa" non seleziona MAI una voce dichiarata (apertura)', () => {
+  const b = freshBook();
+  applyOpening(b, { year: 2026, quarters: { 1: { revenue: 500_000_000 } } }, TODAY);
+  // le aperture hanno createdAt = ADESSO, più recente di entrambe le voci
+  // vere: se la selezione guardasse solo createdAt cancellerebbe un trimestre
+  // intero di fatturato dichiarato.
+  b.entries.push({ id: "a", type: "thu", amount: 1, date: TODAY, provenance: "photo", createdAt: "2026-08-19T01:00:00Z" });
+  b.entries.push({ id: "b", type: "chi", amount: 2, date: TODAY, provenance: "manual", createdAt: "2026-08-19T02:00:00Z" });
+  assert.equal(b.entries[latestCorrectable(b.entries)].id, "b", "vince il createdAt più recente NON dichiarato");
+});
+
+test('"sửa": solo aperture nel libro → niente da correggere (-1)', () => {
+  const b = freshBook();
+  applyOpening(b, { year: 2026, quarters: { 1: { revenue: 100 }, 2: { revenue: 200 } } }, TODAY);
+  assert.equal(latestCorrectable(b.entries), -1);
+  assert.equal(latestCorrectable([]), -1, "libro vuoto");
+});
+
+test('"sửa": senza createdAt decide l\'ordine di arrivo nel libro', () => {
+  const entries = [
+    { id: "x", type: "thu", amount: 1, date: TODAY, provenance: "photo" },
+    { id: "y", type: "thu", amount: 2, date: TODAY, provenance: "photo" },
+  ];
+  assert.equal(entries[latestCorrectable(entries)].id, "y");
+});
+
+// ---- "khai": l'apertura di metà anno, da Zalo -------------------------------
+test('matchCommand: "khai" instradato, anche maiuscolo', () => {
+  for (const t of ["khai", "KHAI", " Khai "]) assert.equal(matchCommand(t), "khai", t);
+});
+
+test("parseKhaiCommand: sintassi completa, con e senza diacritici", () => {
+  assert.deepEqual(parseKhaiCommand("khai quý 3 thu 360tr chi 90tr"),
+    { q: 3, revenue: 360_000_000, expenses: 90_000_000, hasChi: true });
+  assert.deepEqual(parseKhaiCommand("khai quy 1 thu 360.000.000"),
+    { q: 1, revenue: 360_000_000, expenses: 0, hasChi: false });
+  assert.deepEqual(parseKhaiCommand("KHAI  QUÝ 2  thu 1tr2  chi 500k"),
+    { q: 2, revenue: 1_200_000, expenses: 500_000, hasChi: true });
+});
+
+test("parseKhaiCommand: lo 0 esplicito passa — nelle aperture 0 = cancella", () => {
+  assert.deepEqual(parseKhaiCommand("khai quý 2 thu 0"),
+    { q: 2, revenue: 0, expenses: 0, hasChi: false });
+  assert.deepEqual(parseKhaiCommand("khai quý 2 thu 0 chi 0"),
+    { q: 2, revenue: 0, expenses: 0, hasChi: true });
+});
+
+test('parseKhaiCommand: "khai" nudo o illeggibile → help, mai un importo indovinato', () => {
+  assert.deepEqual(parseKhaiCommand("khai"), { help: true });
+  assert.deepEqual(parseKhaiCommand("khai quý 1"), { help: true });
+  assert.deepEqual(parseKhaiCommand("khai quý 1 thu abc"), { help: true });
+});
+
+test("parseKhaiCommand: ciò che non è khai passa oltre", () => {
+  // NB: "khải hoàn" normalizza in "khai hoan" e quindi riceve l'help — con i
+  // diacritici rimossi khai e khải sono indistinguibili, ed è il male minore.
+  for (const t of ["thu 2tr4", "sổ", "", null, "SUA123", "hôm nay khai trương"])
+    assert.equal(parseKhaiCommand(t), null, JSON.stringify(t));
+});
+
+test("khai: il parser dei soldi NON deve poter rubare il comando", () => {
+  // in server.js il ramo khai gira prima di parseMoneyCommand; questo test
+  // difende il prerequisito: il parser khai riconosce la frase con le cifre.
+  assert.ok(parseKhaiCommand("khai quý 1 thu 360tr"), "khai deve riconoscerla");
+  assert.equal(parseMoneyCommand("khai"), null, "un khai nudo non è un importo");
+});
+
+test("khai: quý futuro e quý 5 rifiutati con il motivo, mai ignorati", () => {
+  const b = freshBook();
+  const k4 = parseKhaiCommand("khai quý 4 thu 100tr");   // TODAY è in Q3/2026
+  const r4 = applyOpening(b, { year: 2026, quarters: { [k4.q]: { revenue: k4.revenue, expenses: k4.expenses } } }, TODAY);
+  assert.equal(r4.entries, 0);
+  assert.match(r4.skipped[0].why, /future/);
+  const k5 = parseKhaiCommand("khai quý 5 thu 100tr");
+  const r5 = applyOpening(b, { year: 2026, quarters: { [k5.q]: { revenue: k5.revenue, expenses: k5.expenses } } }, TODAY);
+  assert.equal(r5.entries, 0);
+  assert.match(r5.skipped[0].why, /1-4/);
+  assert.equal(b.entries.length, 0, "un rifiuto non deve sporcare il libro");
 });
