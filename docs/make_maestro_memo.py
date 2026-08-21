@@ -140,9 +140,9 @@ def build(lang, out):
         [("Receipt photo → AI extraction → confirmed ledger entry (Claude vision; deterministic demo "
           "fallback)" if E else "Foto scontrino → estrazione AI → voce confermata a libro (visione Claude; "
           "fallback demo deterministico)"), "LIVE"],
-        [("Tax thresholds engine (500M taxable / 1B e-invoice, Circular 40/2021 rates) with plain-language "
+        [("Tax thresholds engine (500M taxable / 1B e-invoice, rates per Laws 48/2024 & 109/2025) with plain-language "
           "warnings" if E else "Motore soglie fiscali (500M imponibile / 1B e-fattura, aliquote Circolare "
-          "40/2021) con avvisi in linguaggio semplice"), "LIVE"],
+          "48/2024 e 109/2025) con avvisi in linguaggio semplice"), "LIVE"],
         [("Pre-filled quarterly declaration 01/CNKD + print/PDF + Excel export" if E else
           "Dichiarazione trimestrale 01/CNKD precompilata + stampa/PDF + export Excel"), "LIVE"],
         [("Accounts (phone+PIN), household & tax-agent roles, 30-day pilot subscriptions" if E else

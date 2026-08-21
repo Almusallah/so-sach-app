@@ -20,7 +20,7 @@ export function buildDeclaration(book, { year, q, now = new Date() } = {}) {
   const cat = CATEGORIES[book.profile.category] || CATEGORIES.services_goods;
 
   return {
-    form: "01/CNKD (Thông tư 40/2021/TT-BTC) — BẢN NHÁP / DRAFT",
+    form: "01/CNKD (Thông tư 50/2026/TT-BTC) — BẢN NHÁP / DRAFT",
     period: `Quý ${Q} năm ${Y}`,
     year: Y, quarter: Q,
     generatedAt: todayVN(now),

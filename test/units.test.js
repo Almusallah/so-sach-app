@@ -183,7 +183,7 @@ test("quarterOf: i confini di trimestre", () => {
   assert.equal(quarterOf(new Date("2026-12-31T12:00:00Z")).label, "Q4/2026");
 });
 
-test("quarterlyTax: aliquote Circ. 40/2021 per le tre categorie", () => {
+test("quarterlyTax: aliquote per le tre categorie (L.48/2024 GTGT + L.109/2025 TNCN, valori ex Circ. 40/2021)", () => {
   const over = 2_000_000_000; // sopra soglia → imposta dovuta
   assert.deepEqual(
     (({ vat, pit, total, exempt }) => ({ vat, pit, total, exempt }))(quarterlyTax(100_000_000, "distribution", over)),

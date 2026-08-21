@@ -204,9 +204,9 @@ def build(lang, filename):
          "with plain-language alerts before crossing." if E else
          "<b>Radar delle soglie.</b> Barre live verso la soglia di tassabilità (500M) e l'obbligo e-fattura "
          "(1 mld), con avvisi in linguaggio semplice prima del superamento."),
-        ("<b>Declaration, pre-filled.</b> Form 01/CNKD (Circular 40/2021) with the correct presumptive rates "
+        ("<b>Declaration, pre-filled.</b> Form 01/CNKD (Circular 50/2026; rates per Laws 48/2024 &amp; 109/2025) with the correct presumptive rates "
          "per business category, exemption logic, and a print/PDF view a tax agent can file." if E else
-         "<b>Dichiarazione precompilata.</b> Mod. 01/CNKD (Circolare 40/2021) con le aliquote presuntive "
+         "<b>Dichiarazione precompilata.</b> Mod. 01/CNKD (Circolare 50/2026; aliquote da Leggi 48/2024 e 109/2025) con le aliquote presuntive "
          "corrette per categoria, logica di esenzione e vista stampa/PDF che il đại lý thuế può depositare."),
         ("<b>Built to rent the moat.</b> E-invoice transmission stays with GDT-accredited providers — we "
          "integrate one (MISA/Viettel/VNPT) and sell the intelligence layer above." if E else

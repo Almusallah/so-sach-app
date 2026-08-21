@@ -145,7 +145,7 @@ def build(lang, out):
           else "soglia imponibile alzata da 500 triệu a 1 tỷ VND"),
          ("most of the market is exempt — but must still file" if E
           else "gran parte del mercato è esente — ma deve comunque dichiarare")],
-        [("Circular 40/2021" if E else "Circolare 40/2021"),
+        [("Laws 48/2024 & 109/2025, Decree 68/2026" if E else "Leggi 48/2024 e 109/2025, Decreto 68/2026"),
          ("presumptive rates on revenue: 1%+0.5% / 3%+1.5% / 5%+2% by activity" if E
           else "aliquote presuntive sui ricavi: 1%+0,5% / 3%+1,5% / 5%+2% per attività"),
          ("everyone above the threshold" if E else "chiunque sopra soglia")],

@@ -41,5 +41,5 @@ Verifica firma implementata: `sha256(appId + rawBody + timestamp + OASecretKey)`
 non serve qui; fatturazione e-invoice dalla società VN (obbligo tuo stesso!).
 
 ## 5. Prezzi/consulenza
-Prima del lancio: 1 sessione con un đại lý thuế per validare aliquote (Circ. 40/2021), soglie 2026 e
+Prima del lancio: 1 sessione con un đại lý thuế per validare aliquote (Luật 48/2024 + 109/2025, regime NĐ 68/2026), soglie 2026 e
 formato 01/CNKD. Le costanti stanno in `src/tax.js` e via env (`TAX_FREE_THRESHOLD`, `EINVOICE_THRESHOLD`).

@@ -1,7 +1,9 @@
 // ============================================================================
 //  Sổ Sạch — motore fiscale per hộ kinh doanh (regime 2026, post-khoán).
 //  ATTENZIONE PROTOTIPO: aliquote e soglie codificate dalle norme citate nel
-//  README (Circ. 40/2021/TT-BTC per le aliquote %; per l'e-invoice il vecchio
+//  README (aliquote %: Luật GTGT 48/2024 + Luật TNCN 109/2025, regime NĐ
+//  68/2026 mod. da 141/2026 — la vecchia Circ. 40/2021 è superata dal
+//  01/01/2026 ma i VALORI restano identici; per l'e-invoice il vecchio
 //  Decreto 70/2025 è stato abrogato e sostituito dal Nghị định 254/2026/NĐ-CP,
 //  in vigore dal 01/07/2026, che oggi regge la soglia). Vanno validate con un
 //  đại lý thuế prima dell'uso reale.
@@ -21,7 +23,8 @@ export const THRESHOLDS = {
 };
 
 // Categorie di attività con aliquote presuntive (VAT% + PIT% sui ricavi)
-// secondo l'allegato della Circolare 40/2021/TT-BTC.
+// Valori invariati dalla vecchia Circ. 40/2021, oggi fondati su Luật GTGT
+// 48/2024 (1%/3%/5%) e Luật TNCN 109/2025 (0,5%/1,5%/2%), regime NĐ 68/2026.
 export const CATEGORIES = {
   distribution: {
     vi: "Phân phối, cung cấp hàng hoá",
