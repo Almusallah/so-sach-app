@@ -13,8 +13,9 @@ import {
   thresholdStatus, quarterOf, nextDeadline, partsOf,
 } from "./src/tax.js";
 import { extractReceipt, extractionMode } from "./src/extract.js";
-import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage, formatQuarterMessage, tokenStatus, vnDate } from "./src/zalo.js";
-import { matchCommand, menuText, parseKhaiCommand } from "./src/commands.js";
+import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage, formatQuarterMessage, formatYearMessage, formatLowConfidenceMessage, tokenStatus, vnDate } from "./src/zalo.js";
+import { matchCommand, matchCommandFuzzy, matchLangCommand, normalize, menuText, parseKhaiCommand } from "./src/commands.js";
+import { makePendingStore } from "./src/pending.js";
 import { buildDeclaration } from "./src/declaration.js";
 import { bootstrapFromEnv, exchangeOaCode } from "./src/zalo_token.js";
 import { initStore, storeMode, books, accounts, leads, getBook, persistBook, persistAccount, persistLead, removeBook } from "./src/store.js";
@@ -26,6 +27,7 @@ import { todayVN } from "./src/vndate.js";
 import { applyOpening, openingOf, declaredRevenue, latestCorrectable } from "./src/opening.js";
 import { sampleEntries, SAMPLE_PROFILE } from "./src/sample.js";
 import { demoAgency } from "./src/demo_agency.js";
+import { validateSheetsUrl, buildSheetsPayload, makePushQueue, pushToSheet } from "./src/sheets.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -91,10 +93,59 @@ function mergeZaloBook(zaloId, phone) {
   const dst = getBook("u:" + phone);
   const n = src.entries.length;
   dst.entries.push(...src.entries);
+  // L'eventuale config Google Sheets migra sul libro di destinazione PRIMA
+  // del removeBook: un timer di push pendente sul libro cancellato non deve
+  // poterlo ricreare vuoto (Code.gs fa clearContents — spazzerebbe il foglio).
+  if (src.profile?.sheets && !dst.profile.sheets) dst.profile.sheets = src.profile.sheets;
   removeBook("zalo:" + zaloId);
   persistBook("u:" + phone);
+  // Il libro fuso è appena cambiato (voci nuove e/o config Sheets migrata):
+  // senza questo touch il foglio dell'account resta indietro fino alla
+  // PROSSIMA mutazione — che può arrivare fra giorni.
+  sheetsQueue.touch("u:" + phone);
   return n;
 }
+
+// ---- Google Sheets: motore di push ------------------------------------------------
+// Il libro è la fonte di verità, il foglio è una vista: un push fallito si
+// logga e finisce in lastPushOk, MAI blocca la scrittura contabile.
+// retries: 2 con backoff sul push automatico, 0 su config/push manuale
+// (lì l'utente vede l'errore in chiaro e riprova).
+async function sheetsPushNow(uid, { retries = 0 } = {}) {
+  // books[uid] diretto, NON getBook: un libro rimosso (merge Zalo→account)
+  // non va MAI ricreato vuoto da un push in ritardo — Code.gs fa clearContents
+  // e un libro vuoto spazzerebbe le tab del foglio dell'utente.
+  const b = books[uid];
+  if (!b) return { ok: false, error: "Sổ không tồn tại" };
+  const cfg = b.profile?.sheets;
+  if (!cfg?.url || !cfg?.secret) return { ok: false, error: "Chưa kết nối Google Sheets" };
+  const payload = buildSheetsPayload(b);
+  let out = { ok: false, error: "?" };
+  for (let i = 0; i <= retries; i++) {
+    if (i) await new Promise((r) => setTimeout(r, i * 2000)); // backoff 2s, 4s
+    try { out = await pushToSheet(cfg.url, cfg.secret, payload); }
+    catch (e) { out = { ok: false, error: e.message }; }
+    if (out.ok) break;
+  }
+  cfg.lastPushAt = new Date().toISOString();
+  cfg.lastPushOk = !!out.ok;
+  persistBook(uid);
+  if (!out.ok) console.error(`sheets push ${uid}:`, out.error);
+  return out;
+}
+
+// Push AUTOMATICO: 30 s di quiete dopo l'ULTIMA mutazione, un timer per uid
+// (un fiume di foto non produce un fiume di push). La pushFn non lancia mai
+// verso l'esterno e ignora "demo" (libro condiviso fra tutti gli anonimi:
+// il foglio di uno non deve ricevere i libri di tutti) e i libri senza config.
+const SHEETS_DEBOUNCE_MS = Number(process.env.SHEETS_DEBOUNCE_MS) || 30_000;
+const sheetsQueue = makePushQueue(async (uid) => {
+  try {
+    if (uid === "demo") return;
+    if (!books[uid]?.profile?.sheets) return;
+    await sheetsPushNow(uid, { retries: 2 });
+  } catch (e) { console.error("sheets auto-push:", e.message); }
+}, { delayMs: SHEETS_DEBOUNCE_MS });
 
 // ---- Zalo webhook (raw body PRIMA del json parser, per la firma) ---------------
 // Deduplica gli eventi Zalo. "Webhook Retry" è ATTIVO lato Zalo: se non
@@ -104,6 +155,11 @@ function mergeZaloBook(zaloId, phone) {
 // mappa in memoria con TTL (un riavvio la svuota: è accettabile).
 const seenEvents = new Map();
 const EVENT_TTL_MS = 10 * 60 * 1000;
+
+// Estrazioni foto a bassa confidenza in attesa di conferma ("1" entro 10 min):
+// la voce NON è nel libro finché l'utente non conferma. In memoria per scelta,
+// come seenEvents — vedi src/pending.js per la semantica di scarto.
+const pendingPhotos = makePendingStore();
 function alreadyHandled(key) {
   if (!key) return false;                       // senza id non possiamo dedurre: meglio processare
   const now = Date.now();
@@ -151,6 +207,14 @@ async function handleZaloEvent(event) {
     //    contatto torna muto: riattivare questo ramo, non solo il toggle.
     if (event.event_name === "user_send_image") {
       const url = event?.message?.attachments?.[0]?.payload?.url;
+      // La lingua vive sul PROFILO del libro (condivisa col web via
+      // /api/profile). books[] diretto, non getBook: chi manda una foto non
+      // deve veder nascere un libro solo per la lettura della lingua.
+      const bookUid = zaloBookUid(uid); // account collegato o libro Zalo
+      const lang = books[bookUid]?.profile?.lang || "vi";
+      // Una nuova foto scarta qualunque proposta rimasta in sospeso: se
+      // restasse viva, un "1" tardivo salverebbe la voce VECCHIA sbagliata.
+      pendingPhotos.take(uid);
       // Zalo consegna i dati utente COMPLETI solo a IP vietnamiti (policy dal
       // 29/02/2024, confermata dal BQT il 03/08/2026). I campi elencati sono di
       // profilo — che non usiamo — ma se anche l'URL dell'allegato venisse
@@ -163,13 +227,13 @@ async function handleZaloEvent(event) {
           JSON.stringify(event?.message?.attachments || null).slice(0, 400) +
           "  ⚠️ se è vuoto o privo di 'url' è il filtro IP non-Vietnam: serve un IP VN."
         );
-        await sendText(uid,
-          "😕 Mình nhận được ảnh nhưng chưa tải về được. Bạn thử gửi lại giúp mình nhé — " +
-          "hoặc gõ số tiền để mình ghi tay.");
+        await sendText(uid, lang === "en"
+          ? "😕 I got the photo but couldn't download it. Please send it again — or type the amount and I'll record it by hand."
+          : "😕 Mình nhận được ảnh nhưng chưa tải về được. Bạn thử gửi lại giúp mình nhé — " +
+            "hoặc gõ số tiền để mình ghi tay.");
         return;
       }
       {
-        const bookUid = zaloBookUid(uid); // account collegato o libro Zalo
         // Ogni passo qui può fallire (URL CDN scaduto, foto illeggibile, quota
         // Claude). Prima il fallimento era muto: l'utente mandava la foto e il
         // bot non rispondeva NULLA — indistinguibile da "il prodotto è rotto".
@@ -183,62 +247,145 @@ async function handleZaloEvent(event) {
           entry = { id: "e" + Date.now(), ...extracted, source: "zalo", provenance: "photo", createdAt: new Date().toISOString() };
         } catch (e) {
           console.error("zalo image pipeline:", e.message);
-          await sendText(uid,
-            "😕 Mình chưa đọc được hoá đơn này. Bạn chụp lại rõ hơn (đủ ánh sáng, thấy rõ số tiền) " +
-            "rồi gửi lại giúp mình nhé. Hoặc gõ số tiền để mình ghi tay.");
+          await sendText(uid, lang === "en"
+            ? "😕 I couldn't read this receipt. Take a clearer photo (good light, amount clearly visible) and send it again — or type the amount and I'll record it by hand."
+            : "😕 Mình chưa đọc được hoá đơn này. Bạn chụp lại rõ hơn (đủ ánh sáng, thấy rõ số tiền) " +
+              "rồi gửi lại giúp mình nhé. Hoặc gõ số tiền để mình ghi tay.");
+          return;
+        }
+        // Confidenza bassa → NIENTE scrittura. Il libro è un registro FISCALE:
+        // una voce incerta scritta zitta è il guasto peggiore possibile (sembra
+        // giusta). La proposta resta in sospeso 10 minuti e si salva solo con
+        // un "1" esplicito — vedi il ramo testo e src/pending.js.
+        if (Number(entry.confidence ?? 1) < 0.6) {
+          pendingPhotos.put(uid, entry);
+          await sendText(uid, formatLowConfidenceMessage(entry, lang));
           return;
         }
         const b = getBook(bookUid);
         b.entries.push(entry);
         persistBook(bookUid);
-        await sendText(uid, formatEntryMessage(entry));
+        sheetsQueue.touch(bookUid);   // vista Sheets: push dopo la quiete
+        await sendText(uid, formatEntryMessage(entry, lang));
       }
     } else if (event.event_name === "user_send_text") {
       const rawText = (event?.message?.text || "").trim();
-      const txt = rawText.toLowerCase();
+      const bookUid = zaloBookUid(uid); // account collegato o libro Zalo
+      const lang = books[bookUid]?.profile?.lang || "vi";
+
+      // 0) Proposta foto in sospeso: si consuma A OGNI messaggio (take rimuove
+      //    sempre, scaduta o no). Solo "1" salva; "2"/"3" ricevono l'aiuto che
+      //    le opzioni promettono; qualunque altro testo scarta in silenzio e
+      //    prosegue nel router normale.
+      const pendingEntry = pendingPhotos.take(uid);
+      if (pendingEntry) {
+        const choice = normalize(rawText);
+        if (choice === "1") {
+          const b = getBook(bookUid);
+          b.entries.push(pendingEntry);   // provenance "photo" già sulla voce
+          persistBook(bookUid);
+          sheetsQueue.touch(bookUid);     // vista Sheets: push dopo la quiete
+          await sendText(uid, formatEntryMessage(pendingEntry, lang));
+          return;
+        }
+        if (choice === "2" || choice === "3") {
+          // Senza questo ramo "2" cadrebbe su parseMoneyCommand e il bot
+          // chiederebbe «vuoi registrare 2đ?» — una domanda assurda un
+          // messaggio dopo aver offerto le opzioni numerate.
+          await sendText(uid, choice === "2"
+            ? (lang === "en"
+                ? "👍 Sure — take a clearer photo and send it again, I'll re-read it."
+                : "👍 Ok — bạn chụp lại rõ hơn rồi gửi vào đây nhé, mình đọc lại.")
+            : (lang === "en"
+                ? '⌨️ Type it like this: "thu 2tr4" if it\'s money in, "chi 500k" if it\'s money out.'
+                : '⌨️ Bạn gõ như vầy nhé: "thu 2tr4" nếu là tiền bán, "chi 500k" nếu là tiền mua.'));
+          return;
+        }
+        // qualunque altro testo: proposta scartata, il messaggio segue il router
+      }
+
       // 1) È un codice di collegamento valido? → collega l'account e fondi il sổ.
+      //    Gira PRIMA di tutto il resto, fuzzy compreso: un codice sbagliato di
+      //    una lettera deve restare un codice sbagliato, mai diventare un comando.
       const linkPhone = /^[A-Z0-9]{6}$/.test(rawText.toUpperCase())
         ? consumeLinkCode(rawText, uid) : null;
+      // 2) Cambio lingua: ESATTO dopo normalize, mai fuzzy (commands.js).
+      const langSwitch = matchLangCommand(rawText);
+      // 3) Parser strutturati + comandi. Il fuzzy (distanza ≤ 1) si tenta SOLO
+      //    quando né i parser né il match esatto riconoscono il testo: mai su
+      //    importi, mai sugli argomenti di "khai", mai sul cambio lingua.
+      const khai = parseKhaiCommand(rawText);
+      const money = parseMoneyCommand(rawText);
+      const cmd = matchCommand(rawText) ||
+        (khai || money || langSwitch ? null : matchCommandFuzzy(rawText));
       if (linkPhone) {
         const moved = mergeZaloBook(uid, linkPhone);
         const acct = accounts[linkPhone];
-        await sendText(uid,
-          `✅ Đã kết nối với tài khoản ${acct?.name || linkPhone}.\n` +
-          (moved ? `Đã chuyển ${moved} bút toán từ Zalo vào sổ của bạn.\n` : "") +
-          `Từ giờ sổ trên Zalo và trên web là một — đại lý thuế cũng xem được.`);
-      } else if (matchCommand(rawText) === "fix") {
+        // Dopo il merge il libro è quello dell'ACCOUNT: la lingua giusta per
+        // la conferma è la sua (scelta sul web), non quella del libro Zalo
+        // appena fuso — `lang` calcolata sopra sarebbe già stantia.
+        const mergedLang = books["u:" + linkPhone]?.profile?.lang || "vi";
+        await sendText(uid, mergedLang === "en"
+          ? `✅ Linked to the account ${acct?.name || linkPhone}.\n` +
+            (moved ? `Moved ${moved} entries from Zalo into your book.\n` : "") +
+            `From now on the Zalo and web books are one — your đại lý thuế can see it too.`
+          : `✅ Đã kết nối với tài khoản ${acct?.name || linkPhone}.\n` +
+            (moved ? `Đã chuyển ${moved} bút toán từ Zalo vào sổ của bạn.\n` : "") +
+            `Từ giờ sổ trên Zalo và trên web là một — đại lý thuế cũng xem được.`);
+      } else if (langSwitch) {
+        // La conferma arriva nella lingua NUOVA: è la prova immediata che il
+        // cambio ha preso. Persistita sul profilo del libro → vale anche sul
+        // web (stesso campo di /api/profile).
+        const b = getBook(bookUid);
+        b.profile.lang = langSwitch;
+        persistBook(bookUid);
+        await sendText(uid, langSwitch === "en"
+          ? `✅ English it is. Fiscal terms stay in Vietnamese (01/CNKD, tờ khai, GTGT, TNCN, hạn nộp) — those are the names your tax office uses.\nType "menu" to see the commands · gõ "tiếng việt" để quay lại.`
+          : `✅ Đã chuyển sang tiếng Việt.\nGõ "menu" để xem các lệnh · type "english" for English.`);
+      } else if (cmd === "fix") {
         // "sửa" era promesso in OGNI conferma di registrazione («Trả lời
         // "sửa" nếu cần chỉnh») e non instradato: chi lo digitava riceveva il
         // menu. Chỉnh = cancella l'ultima voce e invita a rimandarla — molto
         // più robusto di un editor via chat.
-        const bookUid = zaloBookUid(uid);
         const b = getBook(bookUid);
         const i = latestCorrectable(b.entries);
         if (!b.entries.length) {
-          await sendText(uid,
-            `Sổ của bạn chưa có bút toán nào để sửa.\n` +
-            `Gửi ảnh hoá đơn hoặc gõ "thu 2tr4" / "chi 500k" để bắt đầu nhé.`);
+          await sendText(uid, lang === "en"
+            ? `Your book has no entries to undo yet.\nSend a receipt photo or type "thu 2tr4" / "chi 500k" to get started.`
+            : `Sổ của bạn chưa có bút toán nào để sửa.\n` +
+              `Gửi ảnh hoá đơn hoặc gõ "thu 2tr4" / "chi 500k" để bắt đầu nhé.`);
         } else if (i === -1) {
           // solo aperture dichiarate: si correggono ri-dichiarando, non cancellando
-          await sendText(uid,
-            `Sổ của bạn chỉ có số liệu tự khai, không có bút toán nào để sửa.\n` +
-            `Muốn chỉnh số tự khai, gõ "khai" để xem cách khai lại.`);
+          await sendText(uid, lang === "en"
+            ? `Your book only holds tự khai (self-declared) figures — nothing to undo.\nTo change those, type "khai" to see how to redeclare.`
+            : `Sổ của bạn chỉ có số liệu tự khai, không có bút toán nào để sửa.\n` +
+              `Muốn chỉnh số tự khai, gõ "khai" để xem cách khai lại.`);
         } else {
           const gone = b.entries.splice(i, 1)[0];
           persistBook(bookUid);
+          sheetsQueue.touch(bookUid);   // vista Sheets: push dopo la quiete
           const vnd = (n) => Number(n || 0).toLocaleString("vi-VN") + "đ";
-          await sendText(uid,
-            `🗑️ Đã xoá bút toán gần nhất:\n` +
-            `${gone.type === "thu" ? "📈 THU" : "📉 CHI"} ${vnd(gone.amount)}\n` +
-            (gone.counterparty ? `${gone.counterparty}\n` : "") +
-            `Ngày: ${vnDate(gone.date)}\n\n` +
-            `Bạn gửi lại ảnh hoá đơn hoặc gõ lại số tiền đúng nhé.`);
+          await sendText(uid, lang === "en"
+            ? `🗑️ Deleted the latest entry:\n` +
+              `${gone.type === "thu" ? "📈 IN" : "📉 OUT"} ${vnd(gone.amount)}\n` +
+              (gone.counterparty ? `${gone.counterparty}\n` : "") +
+              `Date: ${vnDate(gone.date)}\n\n` +
+              `Send the receipt photo again or type the correct amount.`
+            : `🗑️ Đã xoá bút toán gần nhất:\n` +
+              `${gone.type === "thu" ? "📈 THU" : "📉 CHI"} ${vnd(gone.amount)}\n` +
+              (gone.counterparty ? `${gone.counterparty}\n` : "") +
+              `Ngày: ${vnDate(gone.date)}\n\n` +
+              `Bạn gửi lại ảnh hoá đơn hoặc gõ lại số tiền đúng nhé.`);
         }
-      } else if (parseKhaiCommand(rawText)) {
+      } else if (khai || cmd === "khai") {
         // ⚠️ ORDINE: PRIMA di parseMoneyCommand. "khai quý 1 thu 360tr"
         // contiene "thu <importo>" e il parser dei soldi lo registrerebbe come
         // incasso di OGGI — l'esatto contrario di un saldo di apertura.
-        const k = parseKhaiCommand(rawText);
+        // `cmd === "khai"` copre il typo fuzzy sulla parola nuda ("khaii") →
+        // help. Le risposte restano IN VIETNAMITA anche col profilo in inglese:
+        // khai è sintassi fiscale vietnamita per scelta (vedi commands.js) e
+        // chi la digita sta già operando in vietnamita.
+        const k = khai || { help: true };
         const vnd = (n) => Number(n || 0).toLocaleString("vi-VN") + "đ";
         if (k.help) {
           await sendText(uid,
@@ -252,7 +399,6 @@ async function handleZaloEvent(event) {
             `• khai quý 1 thu 0 — xoá số đã khai\n\n` +
             `Số tự khai được ghi riêng (chưa có chứng từ) và không được cộng Điểm Sổ Sạch.`);
         } else {
-          const bookUid = zaloBookUid(uid);
           const b = getBook(bookUid);
           const now = new Date();
           const { year } = quarterOf(now);
@@ -269,6 +415,7 @@ async function handleZaloEvent(event) {
                   : `Bạn kiểm tra lại cú pháp giúp mình: "khai quý 1 thu 360tr".`));
           } else {
             persistBook(bookUid);
+            sheetsQueue.touch(bookUid);   // vista Sheets: push dopo la quiete
             const t = totals(b.entries, { year });
             const st = thresholdStatus(projectAnnual(t.revenue, now));
             const left = Math.max(0, st.taxFree.limit - st.projection);
@@ -289,54 +436,50 @@ async function handleZaloEvent(event) {
               `\n\n💡 Số tự khai không được cộng Điểm Sổ Sạch — điểm chỉ tính trên chứng từ thật.`);
           }
         }
-      } else if (matchCommand(rawText) === "year") {
-        const b = getBook(zaloBookUid(uid));
+      } else if (cmd === "year") {
+        const b = getBook(bookUid);
         const now = new Date();
         const { year } = quarterOf(now);
         const t = totals(b.entries, { year });
         const st = thresholdStatus(projectAnnual(t.revenue, now));
-        const vnd = (n) => n.toLocaleString("vi-VN") + "đ";
         const left = Math.max(0, st.taxFree.limit - st.projection);
-        await sendText(uid,
-          `📒 Sổ năm ${year}\n\n` +
-          `Thu:      ${vnd(t.revenue)}\n` +
-          `Chi:      ${vnd(t.expenses)}\n` +
-          `Lãi gộp:  ${vnd(t.net)}\n\n` +
-          `Dự kiến cả năm: ${vnd(st.projection)}\n` +
-          (st.taxFree.crossed
-            ? `⚠️ Đã vượt ngưỡng 1 tỷ — quý này phải nộp thuế. Gõ "quý" để xem số.`
-            : `✅ Còn ${vnd(left)} nữa mới tới ngưỡng 1 tỷ.`) +
-          `\n\nGõ "quý" để xem quý này và hạn nộp tờ khai.`);
-      } else if (matchCommand(rawText) === "quarter") {
+        // Il testo vive in formatYearMessage (src/zalo.js), accanto alle altre
+        // varianti VI/EN: due copie dello stesso messaggio divergono sempre.
+        await sendText(uid, formatYearMessage({
+          year, revenue: t.revenue, expenses: t.expenses, net: t.net,
+          projection: st.projection, crossed: st.taxFree.crossed, left,
+        }, lang));
+      } else if (cmd === "quarter") {
         // La domanda che il prodotto esiste per rispondere: la 01/CNKD si
         // deposita per TRIMESTRE, e finora sul canale dove vive il cliente
         // questa era l'unica cosa che non si poteva chiedere.
-        const b = getBook(zaloBookUid(uid));
-        await sendText(uid, formatQuarterMessage(buildDeclaration(b)));
-      } else if (matchCommand(rawText) === "menu") {
-        await sendText(uid, menuText({ linked: !!findAccountByZaloId(uid) }));
-      } else if (parseMoneyCommand(rawText)) {
+        const b = getBook(bookUid);
+        await sendText(uid, formatQuarterMessage(buildDeclaration(b), lang));
+      } else if (cmd === "menu") {
+        await sendText(uid, menuText({ linked: !!findAccountByZaloId(uid), lang }));
+      } else if (money) {
         // Il totale di fine giornata scritto a mano: la via principale per il
         // FATTURATO di un quán, dove le foto funzionano solo per le spese.
-        const cmd = parseMoneyCommand(rawText);
         const vnd = (n) => n.toLocaleString("vi-VN") + "đ";
-        if (cmd.needsType) {
+        if (money.needsType) {
           // Non si indovina: per un quán sarebbe quasi sempre incasso, ma
           // "quasi sempre" in un registro fiscale è una voce sbagliata che
           // sembra giusta. Una domanda costa un messaggio.
-          await sendText(uid,
-            `Bạn muốn ghi ${vnd(cmd.amount)} là khoản nào?\n` +
-            `• Gõ "thu ${cmd.amount}" nếu là tiền bán hàng\n` +
-            `• Gõ "chi ${cmd.amount}" nếu là tiền mua/chi phí`);
+          await sendText(uid, lang === "en"
+            ? `Is ${vnd(money.amount)} money in or out?\n` +
+              `• Type "thu ${money.amount}" if it's sales income\n` +
+              `• Type "chi ${money.amount}" if it's a purchase/expense`
+            : `Bạn muốn ghi ${vnd(money.amount)} là khoản nào?\n` +
+              `• Gõ "thu ${money.amount}" nếu là tiền bán hàng\n` +
+              `• Gõ "chi ${money.amount}" nếu là tiền mua/chi phí`);
         } else {
-          const bookUid = zaloBookUid(uid);
           const entry = {
             id: "e" + Date.now(),
-            type: cmd.type,
-            amount: cmd.amount,
+            type: money.type,
+            amount: money.amount,
             date: todayVN(),
-            counterparty: cmd.type === "thu" ? "Khách lẻ" : "",
-            description: cmd.type === "thu" ? "Tổng bán trong ngày" : "Ghi tay",
+            counterparty: money.type === "thu" ? "Khách lẻ" : "",
+            description: money.type === "thu" ? "Tổng bán trong ngày" : "Ghi tay",
             source: "zalo",
             provenance: "manual",
             createdAt: new Date().toISOString(),
@@ -344,10 +487,11 @@ async function handleZaloEvent(event) {
           const b = getBook(bookUid);
           b.entries.push(entry);
           persistBook(bookUid);
-          await sendText(uid, formatEntryMessage(entry));
+          sheetsQueue.touch(bookUid);   // vista Sheets: push dopo la quiete
+          await sendText(uid, formatEntryMessage(entry, lang));
         }
       } else {
-        await sendText(uid, menuText({ linked: !!findAccountByZaloId(uid) }));
+        await sendText(uid, menuText({ linked: !!findAccountByZaloId(uid), lang }));
       }
     }
   } catch (e) { console.error("zalo webhook:", e.message); }
@@ -546,6 +690,20 @@ app.post("/api/extract", rateLimit({ windowMs: 15 * 60_000, max: 15, globalMax: 
 });
 
 // ---- Libro ----------------------------------------------------------------------
+// Vista pubblica del profilo: sheets.secret è WRITE-ONLY, come pinHash/salt in
+// publicAccount (src/auth.js). ledgerPayload serve quattro rotte — /api/ledger,
+// /api/opening, l'eco di /api/profile e la vista dell'đại lý thuế — e con il
+// profilo intero il segreto del foglio trapelerebbe in ognuna.
+function publicProfile(profile) {
+  if (!profile) return profile;
+  const pub = { ...profile };
+  if (pub.sheets) {
+    const { secret, ...rest } = pub.sheets;
+    pub.sheets = { ...rest, connected: !!secret };
+  }
+  return pub;
+}
+
 function ledgerPayload(uid) {
   const b = getBook(uid);
   const now = new Date();
@@ -562,7 +720,7 @@ function ledgerPayload(uid) {
     if (p && p.year === year) monthly[p.month - 1][e.type === "thu" ? "thu" : "chi"] += e.amount;
   }
   return {
-    profile: b.profile,
+    profile: publicProfile(b.profile),
     entries: [...b.entries].sort((a, z) => z.date.localeCompare(a.date)).slice(0, 500),
     year: { ...tYear, label: String(year) },
     quarter: { ...tQuarter, label: `Q${q}/${year}` },
@@ -592,6 +750,7 @@ app.post("/api/ledger", (req, res) => {
   };
   b.entries.push(entry);
   persistBook(uid);
+  sheetsQueue.touch(uid);   // vista Sheets: push dopo la quiete
   res.json({ ok: true, entry });
 });
 
@@ -601,18 +760,85 @@ app.delete("/api/ledger/:id", (req, res) => {
   const before = b.entries.length;
   b.entries = b.entries.filter((e) => e.id !== req.params.id);
   persistBook(uid);
+  sheetsQueue.touch(uid);   // vista Sheets: push dopo la quiete
   res.json({ ok: true, removed: before - b.entries.length });
 });
 
 app.post("/api/profile", (req, res) => {
   const uid = uidFor(req);
   const b = getBook(uid);
-  const { name, category, revenueEstimate } = req.body || {};
+  const { name, category, revenueEstimate, lang } = req.body || {};
   if (name !== undefined) b.profile.name = String(name).slice(0, 120);
   if (category && CATEGORIES[category]) b.profile.category = category;
   if (revenueEstimate !== undefined) b.profile.revenueEstimate = Math.max(0, Number(revenueEstimate) || 0);
+  // lingua del bot/web: whitelist esplicita, come category — un valore fuori
+  // da "vi"|"en" si ignora in silenzio, mai un 400 per un campo opzionale
+  if (lang !== undefined && ["vi", "en"].includes(lang)) b.profile.lang = lang;
   persistBook(uid);
-  res.json({ ok: true, profile: b.profile });
+  res.json({ ok: true, profile: publicProfile(b.profile) });
+});
+
+// ---- Google Sheets: config + push manuale -----------------------------------------
+// requireAuth su TUTTE e tre: il libro "demo" è condiviso fra tutti gli anonimi
+// (il foglio di uno riceverebbe i libri di tutti) e le sandbox anonime non
+// hanno un'identità a cui legare un segreto. uid derivato dal token, mai da ?uid=.
+app.post("/api/sheets/config", requireAuth, async (req, res) => {
+  const { url, secret } = req.body || {};
+  const v = validateSheetsUrl(url);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  if (!String(secret || "").trim())
+    return res.status(400).json({ error: "Thiếu mã bí mật — đặt SECRET trong Apps Script rồi dán vào đây." });
+  const uid = "u:" + req.phone;
+  const b = getBook(uid);
+  b.profile.sheets = { url: v.url, secret: String(secret).trim(), lastPushAt: null, lastPushOk: null };
+  persistBook(uid);
+  // Push di prova IMMEDIATO: URL o secret sbagliati si scoprono ora, non alla
+  // prossima ricevuta. 0 retry: l'errore del foglio arriva in chiaro all'utente.
+  const push = await sheetsPushNow(uid);
+  // Mai il secret nella risposta: publicProfile lo redige.
+  res.json({ ok: true, sheets: publicProfile(b.profile).sheets, push });
+});
+
+app.delete("/api/sheets/config", requireAuth, (req, res) => {
+  const uid = "u:" + req.phone;
+  const b = getBook(uid);
+  delete b.profile.sheets;
+  persistBook(uid);
+  res.json({ ok: true });
+});
+
+// Push manuali IN VOLO, per uid. Il throttle sui 10 s legge lastPushAt, che
+// sheetsPushNow aggiorna solo A PUSH FINITO: due richieste PARALLELE leggevano
+// entrambe il timestamp vecchio e passavano entrambe — il throttle esisteva
+// solo in serie (confermato con 3 push simultanei, 3 arrivi al foglio). Il Set
+// si riempie nel tratto SINCRONO della rotta, quindi la seconda richiesta lo
+// vede sempre; si svuota nel finally, mai lasciato sporco da un errore.
+const manualPushInFlight = new Set();
+
+app.post("/api/sheets/push", requireAuth, async (req, res) => {
+  // Throttle per-uid sul timestamp del profilo — NIENTE middleware rateLimit:
+  // il suo globalMax è un singleton condiviso col contatore Anthropic di
+  // /api/extract, e i push brucerebbero il budget giornaliero dell'estrazione.
+  const uid = "u:" + req.phone;
+  const cfg = books[uid]?.profile?.sheets;
+  if (!cfg?.url) return res.status(400).json({ error: "Chưa kết nối Google Sheets." });
+  if (manualPushInFlight.has(uid)) {
+    res.setHeader("Retry-After", 3);
+    return res.status(429).json({ error: "Vừa đẩy xong — chờ vài giây rồi thử lại nhé." });
+  }
+  const last = cfg.lastPushAt ? Date.parse(cfg.lastPushAt) : 0;
+  const since = Date.now() - (Number.isFinite(last) ? last : 0);
+  if (since < 10_000) {
+    res.setHeader("Retry-After", Math.ceil((10_000 - since) / 1000));
+    return res.status(429).json({ error: "Vừa đẩy xong — chờ vài giây rồi thử lại nhé." });
+  }
+  manualPushInFlight.add(uid);
+  try {
+    const out = await sheetsPushNow(uid);   // 0 retry sul manuale: l'errore si vede
+    res.json(out.ok ? { ok: true, at: cfg.lastPushAt } : { ok: false, error: out.error, at: cfg.lastPushAt });
+  } finally {
+    manualPushInFlight.delete(uid);
+  }
 });
 
 // ---- Bảng đại lý thuế (bản trình diễn) + hồ sơ tín dụng danh mục -----------------
@@ -682,9 +908,11 @@ app.delete("/api/demo-seed", (req, res) => {
 app.get("/api/export.csv", (req, res) => {
   const uid = uidFor(req);
   const b = getBook(uid);
-  const rows = [["Ngày", "Loại", "Số tiền (VND)", "Đối tác", "Mô tả", "Nguồn"]];
+  // 7 colonne, IDENTICHE al payload Sheets ("Gốc" = provenance): i due export
+  // devono raccontare lo stesso libro, colonna per colonna.
+  const rows = [["Ngày", "Loại", "Số tiền (VND)", "Đối tác", "Mô tả", "Nguồn", "Gốc"]];
   for (const e of [...b.entries].sort((a, z) => a.date.localeCompare(z.date))) {
-    rows.push([e.date, e.type === "thu" ? "Thu" : "Chi", e.amount, e.counterparty || "", e.description || "", e.source || ""]);
+    rows.push([e.date, e.type === "thu" ? "Thu" : "Chi", e.amount, e.counterparty || "", e.description || "", e.source || "", e.provenance || ""]);
   }
   const csv = "﻿" + rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\r\n");
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -715,6 +943,7 @@ app.post("/api/opening", (req, res) => {
   const out = applyOpening(b, req.body || {}, todayVN());
   if (out.error) return res.status(400).json({ error: out.error });
   persistBook(uid);
+  sheetsQueue.touch(uid);   // vista Sheets: push dopo la quiete
   res.json({ ok: true, ...out, ledger: ledgerPayload(uid) });
 });
 

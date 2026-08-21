@@ -2,12 +2,40 @@
 // Niente mock: se una route cambia forma, questo test se ne accorge.
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
+import http from "node:http";
+import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const PORT = 3599, BASE = `http://127.0.0.1:${PORT}`;
+// Porta del finto Apps Script (sezione 8): il server lo raggiunge solo perché
+// SHEETS_TEST_HOSTS whitelist-a 127.0.0.1 — in produzione la env non esiste.
+const FPORT = 3598;
 const env = { ...process.env, PORT, NODE_ENV: "test", SESSION_SECRET: "test-secret-e2e",
-  DATABASE_URL: "", ANTHROPIC_API_KEY: "", DATA_DIR: "" };
+  DATABASE_URL: "", ANTHROPIC_API_KEY: "", DATA_DIR: "",
+  SHEETS_TEST_HOSTS: "127.0.0.1", SHEETS_DEBOUNCE_MS: "1000" };
+
+// ⚠️ DATA_DIR env è IGNORATA dal server (data/ è hard-coded accanto a
+// server.js): questo e2e scrive nei file VERI. Si fotografa lo stato prima
+// dello spawn e lo si ripristina nel finally — mai lasciare dietro account
+// di prova, mai committare data/.
+const DATA_DIR_REAL = join(dirname(fileURLToPath(import.meta.url)), "..", "data");
+const DATA_FILES = ["ledger.json", "accounts.json", "leads.json", "settings.json"]
+  .map((f) => join(DATA_DIR_REAL, f));
+const dataBackup = new Map();
+for (const f of DATA_FILES) if (existsSync(f)) dataBackup.set(f, readFileSync(f));
+
+let fake = null;   // finto ricevitore Apps Script, acceso nella sezione 8
 const srv = spawn("node", ["server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
-srv.stderr.on("data", (d) => process.env.VERBOSE && console.error("[srv]", String(d).trim()));
+// TUTTO ciò che il server scrive (stdout E stderr) si conserva: la sezione 9
+// lo passa al setaccio per il secret — un log che lo contenesse finirebbe
+// dritto nei log di Render, leggibili da chiunque abbia accesso alla dashboard.
+let serverLog = "";
+srv.stdout.on("data", (d) => { serverLog += String(d); });
+srv.stderr.on("data", (d) => {
+  serverLog += String(d);
+  if (process.env.VERBOSE) console.error("[srv]", String(d).trim());
+});
 
 const ok = [], bad = [];
 const check = (name, fn) => { try { fn(); ok.push(name); } catch (e) { bad.push(`${name}\n     → ${e.message.split("\n")[0]}`); } };
@@ -23,6 +51,9 @@ async function ready() {
 // L'autenticazione è un Bearer token nel corpo della risposta, NON un cookie:
 // senza Authorization ogni scrittura finisce nel libro condiviso "demo".
 let token = null;
+// Ogni risposta passata da api() si archivia qui: la sezione 9 le setaccia
+// TUTTE per il secret, non solo le due rotte dove il leak è già stato pensato.
+const RESPONSES = [];
 async function api(path, opts = {}) {
   const r = await fetch(BASE + path, {
     ...opts,
@@ -30,6 +61,7 @@ async function api(path, opts = {}) {
       ...(token ? { authorization: "Bearer " + token } : {}), ...(opts.headers || {}) },
   });
   const body = r.headers.get("content-type")?.includes("json") ? await r.json() : await r.text();
+  RESPONSES.push({ path, status: r.status, body });
   return { status: r.status, body };
 }
 
@@ -184,10 +216,10 @@ try {
   const csvBytes = new Uint8Array(await (await fetch(BASE + "/api/export.csv", { headers: { authorization: "Bearer " + token } })).arrayBuffer());
   check("CSV esporta con BOM (Excel VN legge i diacritici)", () =>
     assert.deepEqual([...csvBytes.slice(0, 3)], [0xef, 0xbb, 0xbf]));
+  const csvText = new TextDecoder().decode(csvBytes);
   check("CSV contiene le voci", () => {
-    const txt = new TextDecoder().decode(csvBytes);
-    assert.match(txt, /Ngày","Loại/);
-    assert.ok(txt.split("\r\n").length > 50, "righe");
+    assert.match(csvText, /Ngày","Loại/);
+    assert.ok(csvText.split("\r\n").length > 50, "righe");
   });
 
   // --- 7. il libro è privato ---------------------------------------------
@@ -216,6 +248,147 @@ try {
   check("?uid=u:<phone> NON scrive nel libro dell'hộ (IDOR)", () =>
     assert.equal(after.body.entries.filter((e) => e.counterparty === "IDOR-PROBE").length, 0));
 
+  // --- 8. Google Sheets ----------------------------------------------------
+  // Finto Apps Script: verifica il secret e, come il VERO /exec, risponde 302
+  // verso un secondo URL da cui la risposta si legge in GET — così l'e2e
+  // esercita davvero il redirect manuale a un solo hop del trasporto.
+  let lastPush = null, pushCount = 0, badSecretCount = 0;
+  fake = http.createServer((req, res) => {
+    if (req.method === "POST") {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        let body = null;
+        try { body = JSON.parse(raw); } catch {}
+        if (!body || body.secret !== "sekret-e2e") {
+          badSecretCount++;
+          res.writeHead(200, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ ok: false, error: "bad secret" }));
+        }
+        lastPush = body; pushCount++;
+        res.writeHead(302, { location: `http://127.0.0.1:${FPORT}/echo` });
+        res.end();
+      });
+    } else {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, at: new Date().toISOString() }));
+    }
+  });
+  await new Promise((r) => fake.listen(FPORT, r));
+
+  // URL non-Google → 400 (la whitelist SSRF lavora prima di tutto)
+  const badUrl = await api("/api/sheets/config", { method: "POST",
+    body: JSON.stringify({ url: "https://evil.com/exec", secret: "x" }) });
+  check("config Sheets con URL non-Google → 400", () => assert.equal(badUrl.status, 400));
+
+  // niente auth → 401; e il libro "demo" (condiviso!) non è configurabile
+  const savedTok8 = token; token = null;
+  const noAuth = await api("/api/sheets/config", { method: "POST",
+    body: JSON.stringify({ url: "https://script.google.com/macros/s/x/exec", secret: "x" }) });
+  check("config Sheets senza login → 401", () => assert.equal(noAuth.status, 401));
+  const demoTry = await api("/api/sheets/config?uid=demo", { method: "POST",
+    body: JSON.stringify({ url: "https://script.google.com/macros/s/x/exec", secret: "x" }) });
+  check("config Sheets su demo/anonimo → rifiutata", () => assert.equal(demoTry.status, 401));
+  token = savedTok8;
+
+  // secret sbagliato → il push di prova fallisce e l'errore del foglio arriva in chiaro
+  const wrongSec = await api("/api/sheets/config", { method: "POST",
+    body: JSON.stringify({ url: `http://127.0.0.1:${FPORT}/exec`, secret: "wrong" }) });
+  check("secret sbagliato → errore del foglio visibile in chiaro", () => {
+    assert.equal(wrongSec.status, 200);
+    assert.equal(wrongSec.body.push?.ok, false);
+    assert.equal(wrongSec.body.push?.error, "bad secret");
+    assert.equal(badSecretCount, 1);
+  });
+
+  // config buona → push di prova immediato, attraverso il 302
+  const cfgd = await api("/api/sheets/config", { method: "POST",
+    body: JSON.stringify({ url: `http://127.0.0.1:${FPORT}/exec`, secret: "sekret-e2e" }) });
+  check("config valida → push di prova arrivato al foglio (via 302)", () => {
+    assert.equal(cfgd.status, 200);
+    assert.equal(cfgd.body.push?.ok, true);
+    assert.equal(pushCount, 1);
+    assert.ok(lastPush, "il finto Apps Script deve aver ricevuto il payload");
+  });
+  check("payload: 7 intestazioni e importi come NUMERI", () => {
+    const rows = lastPush.sheets["Sổ thu chi"];
+    assert.deepEqual(rows[0], ["Ngày", "Loại", "Số tiền (VND)", "Đối tác", "Mô tả", "Nguồn", "Gốc"]);
+    assert.ok(rows.length > 100, "tutte le voci del libro");
+    for (const r of rows.slice(1, 20)) assert.equal(typeof r[2], "number", "il foglio deve poter sommare");
+  });
+  check("payload: tab Tổng hợp con i motori fiscali", () => {
+    const s = lastPush.sheets["Tổng hợp"];
+    assert.deepEqual(s[0].slice(0, 5), ["", "Q1", "Q2", "Q3", "Q4"]);
+    assert.ok(s.find((r) => r[0] === "Hạn nộp tờ khai"), "la scadenza della dichiarazione");
+  });
+  check("la risposta della config NON contiene il secret", () => {
+    const j = JSON.stringify(cfgd.body);
+    assert.ok(!j.includes("sekret-e2e"));
+    assert.ok(!/"secret"/.test(j));
+  });
+
+  const led8 = await api("/api/ledger");
+  check("GET /api/ledger non trapela il secret da NESSUNA parte", () => {
+    const j = JSON.stringify(led8.body);
+    assert.ok(!j.includes("sekret-e2e"));
+    assert.ok(!/"secret"/.test(j));
+    assert.ok(led8.body.profile.sheets?.url, "ma l'URL resta visibile per la UI");
+  });
+
+  // throttle: il push di prova della config è appena partito → 429
+  const throttled = await api("/api/sheets/push", { method: "POST" });
+  check("push manuale entro 10 s → 429 (throttle per-uid, non rateLimit)", () =>
+    assert.equal(throttled.status, 429));
+
+  // push AUTOMATICO: una mutazione del libro → debounce (1 s in test) → push
+  const beforeAuto = pushCount;
+  await api("/api/ledger", { method: "POST", body: JSON.stringify({
+    type: "chi", amount: 77_000, date: "2026-08-20", counterparty: "AUTO-SHEETS", description: "auto-push e2e" }) });
+  await new Promise((r) => setTimeout(r, 2000));
+  check("mutazione del libro → push automatico dopo la quiete", () => {
+    assert.equal(pushCount, beforeAuto + 1);
+    assert.ok(JSON.stringify(lastPush.sheets["Sổ thu chi"]).includes("AUTO-SHEETS"),
+      "il push automatico porta la voce nuova");
+  });
+
+  // passati i 10 s il push manuale torna a funzionare — e si spara IN COPPIA:
+  // due richieste parallele leggevano entrambe il lastPushAt vecchio (si
+  // aggiorna solo a push finito) e passavano entrambe il throttle. Ora la
+  // seconda deve vedere il push in volo e ricevere 429.
+  console.log("  ⏳ throttle: attesa 10 s per il push manuale…");
+  await new Promise((r) => setTimeout(r, 10_200));
+  const [mA, mB] = await Promise.all([
+    api("/api/sheets/push", { method: "POST" }),
+    api("/api/sheets/push", { method: "POST" }),
+  ]);
+  check("dopo 10 s il push manuale passa e arriva al foglio", () => {
+    const passed = [mA, mB].filter((r) => r.status === 200);
+    assert.equal(passed.length, 1, "esattamente UNO dei due paralleli passa");
+    assert.equal(passed[0].body.ok, true);
+    assert.equal(pushCount, beforeAuto + 2, "e al foglio arriva UN solo push");
+  });
+  check("push parallelo al primo → 429 (il throttle regge anche in volo)", () =>
+    assert.equal([mA, mB].filter((r) => r.status === 429).length, 1));
+
+  // --- 9. Il secret non esce MAI --------------------------------------------
+  // Il setaccio finale: il secret viaggia SOLO nel corpo della POST di config
+  // (client → server) e nei push verso il foglio. In nessuna risposta, in
+  // nessun export, in nessuna riga di log.
+  check("nessuna delle risposte API catturate contiene il secret", () => {
+    const leaks = RESPONSES.filter((r) => JSON.stringify(r.body ?? "").includes("sekret-e2e"));
+    assert.equal(leaks.length, 0, leaks.map((l) => l.path).join(", "));
+  });
+  check('nessuna risposta serializza una chiave "secret"', () => {
+    const leaks = RESPONSES.filter((r) => /"secret"\s*:/.test(JSON.stringify(r.body ?? "")));
+    assert.equal(leaks.length, 0, leaks.map((l) => l.path).join(", "));
+  });
+  check("nemmeno il CSV esportato contiene il secret", () =>
+    assert.ok(!csvText.includes("sekret-e2e")));
+  check("il server non logga MAI il secret (stdout + stderr)", () => {
+    const hits = serverLog.split("\n").filter((l) => l.includes("sekret-e2e"));
+    assert.equal(hits.length, 0, hits.slice(0, 3).join(" | "));
+  });
+
   // --- riepilogo -----------------------------------------------------------
   console.log("\n\x1b[1mE2E — 01/CNKD, Quý 3 năm 2026\x1b[0m");
   console.log("  Người nộp thuế :", dec2.taxpayer);
@@ -226,6 +399,15 @@ try {
   console.log("  TỔNG PHẢI NỘP  :", vnd(dec2.total));
 } finally {
   srv.kill();
+  fake?.close();
+  // Il server è morto (scritture sincrone: niente write in coda) — si
+  // ripristina data/ com'era prima dell'e2e; i file nati durante il test
+  // e assenti nel backup si eliminano.
+  await new Promise((r) => setTimeout(r, 400));
+  for (const f of DATA_FILES) {
+    if (dataBackup.has(f)) writeFileSync(f, dataBackup.get(f));
+    else if (existsSync(f)) rmSync(f);
+  }
 }
 
 console.log("");

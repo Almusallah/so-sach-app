@@ -4,10 +4,69 @@
 //  closeModal, vnd } esposti da app.js.
 // ============================================================================
 (() => {
-  const { api, refresh, toast, showModal, closeModal, vnd } = window.SS;
+  const { api, refresh, toast, showModal, closeModal, vnd, T } = window.SS;
   const $ = (s, r = document) => r.querySelector(s);
   const LANG = () => localStorage.getItem("ss_lang") || "vi";
   const t = (vi, en) => (LANG() === "vi" ? vi : en);
+
+  // ---- Google Sheets: template Apps Script -----------------------------------
+  // Fonte di verità: docs/sheets/Code.gs — testo incorporato QUI perché il
+  // bottone di copia legge questa costante, mai il DOM: l'auto-traduzione del
+  // browser riscrive il testo visibile e corromperebbe il codice incollato.
+  const GS_CODE = `/**
+ * Sổ Sạch → Google Sheets — ricevitore Apps Script.
+ *
+ * PERCHÉ QUESTO PATTERN. Niente OAuth Google sul server, niente Cloud project,
+ * niente chiavi da custodire: il FOGLIO ospita un piccolo web-endpoint proprio
+ * (questo script) e Sổ Sạch vi SPINGE i dati. L'utente resta proprietario del
+ * foglio e del segreto; revocare l'accesso = cancellare il deployment.
+ * È lo stesso schema già in produzione nei fogli di ricerca immobiliare.
+ *
+ * INSTALLAZIONE (una volta, ~2 minuti — istruzioni guidate sul sito):
+ *   1. Crea un Google Sheet vuoto.
+ *   2. Estensioni → Apps Script → incolla questo file.
+ *   3. Imposta SECRET qui sotto (una stringa lunga qualsiasi).
+ *   4. Deploy → New deployment → Web app → Execute as: Me →
+ *      Who has access: Anyone. Copia l'URL /exec.
+ *   5. Incolla URL + SECRET in Sổ Sạch (Tài khoản → Google Sheets).
+ */
+
+const SECRET = 'CAMBIAMI-STRINGA-LUNGA-A-CASO';
+
+function doPost(e) {
+  try {
+    const body = JSON.parse(e.postData.contents);
+    if (!body || body.secret !== SECRET) {
+      return _json({ ok: false, error: 'bad secret' });
+    }
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+    // Il payload è { sheets: { "Sổ thu chi": [[...]], "Tổng hợp": [[...]] } }.
+    // Ogni tab viene RISCRITTA per intero: idempotente, niente stati a metà —
+    // un push fallito a metà non lascia il foglio incoerente, il prossimo
+    // push lo sistema.
+    for (const [name, rows] of Object.entries(body.sheets || {})) {
+      if (!Array.isArray(rows) || !rows.length) continue;
+      let sh = ss.getSheetByName(name);
+      if (!sh) sh = ss.insertSheet(name);
+      sh.clearContents();
+      const width = Math.max.apply(null, rows.map(r => r.length));
+      const norm = rows.map(r => r.concat(Array(width - r.length).fill('')));
+      sh.getRange(1, 1, norm.length, width).setValues(norm);
+      sh.setFrozenRows(1);
+    }
+    return _json({ ok: true, at: new Date().toISOString() });
+  } catch (err) {
+    return _json({ ok: false, error: String(err) });
+  }
+}
+
+function _json(o) {
+  return ContentService.createTextOutput(JSON.stringify(o))
+    .setMimeType(ContentService.MimeType.JSON);
+}`;
+
+  const escHtml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
   const tokenKey = "ss_token";
   window.SS.getToken = () => localStorage.getItem(tokenKey);
@@ -90,6 +149,41 @@
     const cfg = await api("/api/config");
     const isPilot = cfg.billing === "pilot";
     const plans = Object.values(cfg.plans);
+    // Stato Google Sheets: vive nel profilo del libro (il server redige il
+    // secret — qui arrivano solo url e diagnostica di sincronizzazione).
+    const sh = (await api("/api/ledger"))?.profile?.sheets || null;
+    const fmtT = (iso) => new Date(iso).toLocaleString(LANG() === "vi" ? "vi-VN" : "en-GB");
+    const shStatus = !sh ? "" : sh.lastPushAt
+      ? (sh.lastPushOk
+          ? `<div class="sheets-status ok">${T("sh_last_ok", { t: fmtT(sh.lastPushAt) })}</div>`
+          : `<div class="sheets-status fail">${T("sh_last_fail", { t: fmtT(sh.lastPushAt) })}</div>`)
+      : `<div class="sheets-status">${T("sh_never")}</div>`;
+    const sheetsSection = `
+      <div class="sheets-box">
+        <div class="sheets-head"><b>${T("sh_title")}</b></div>
+        <div class="conf-note">${T("sh_sub")}</div>
+        ${shStatus}
+        <div class="field"><label>${T("sh_url")}</label>
+          <input id="shUrl" value="${(sh?.url || "").replace(/"/g, "&quot;")}" placeholder="https://script.google.com/macros/s/…/exec" /></div>
+        <div class="field"><label>${T("sh_secret")}</label>
+          <input id="shSecret" type="password" placeholder="••••••••" autocomplete="new-password" />
+          ${sh?.connected ? `<small class="sheets-hint">${T("sh_secret_saved")}</small>` : ""}</div>
+        <div style="display:flex;gap:9px">
+          <button class="btn solid block" id="shConnect">${T("sh_connect")}</button>
+          ${sh ? `<button class="btn ghost block" id="shPushNow">${T("sh_push")}</button>
+                  <button class="btn ghost block" id="shDisc">${T("sh_disconnect")}</button>` : ""}
+        </div>
+        ${sh ? `<div class="sheets-hint">${T("sh_auto_note")}</div>` : ""}
+        <details class="gs-help">
+          <summary>${T("sh_help_t")}</summary>
+          <ol class="gs-steps">
+            <li>${T("sh_step1")}</li><li>${T("sh_step2")}</li><li>${T("sh_step3")}</li>
+            <li>${T("sh_step4")}</li><li>${T("sh_step5")}</li>
+          </ol>
+          <pre class="gs-code" translate="no">${escHtml(GS_CODE)}</pre>
+          <button class="btn ghost block" id="shCopy">${T("sh_copy")}</button>
+        </details>
+      </div>`;
     const subLine = ME.sub?.activeUntil
       ? t(`Gói ${ME.sub.plan === "pro" ? "Pro" : "Cơ bản"}${ME.sub.pilot ? " (pilot)" : ""} đến ${new Date(ME.sub.activeUntil).toLocaleDateString("vi-VN")}`,
           `${ME.sub.plan === "pro" ? "Pro" : "Core"} plan${ME.sub.pilot ? " (pilot)" : ""} until ${new Date(ME.sub.activeUntil).toLocaleDateString("en-GB")}`)
@@ -118,6 +212,7 @@
                  : `<button class="btn ghost block" id="zaloLinkBtn">${t("Lấy mã kết nối Zalo", "Get Zalo link code")}</button>
                     <small>${t("Để gửi hoá đơn qua Zalo mà sổ vẫn về tài khoản này (và đại lý thuế xem được).", "So receipts you send on Zalo land in this account (and your tax agent can see them).")}</small>`}
              </div>`}
+        ${sheetsSection}
         <div style="display:flex;gap:9px;margin-top:14px">
           <a class="btn ghost block" href="/api/export.csv" onclick="this.href='/api/export.csv'" id="csvBtn">📥 ${t("Xuất Excel (CSV)", "Export Excel (CSV)")}</a>
           <button class="btn ghost block" id="logoutBtn">${t("Đăng xuất", "Sign out")}</button>
@@ -147,6 +242,36 @@
           <button class="btn solid block" id="zDone" style="margin-top:12px">${t("Xong", "Done")}</button>
         </div>`);
       $("#zDone").addEventListener("click", () => { closeModal(); renderAcct(); });
+    });
+    // ---- Google Sheets: kết nối / đẩy ngay / ngắt kết nối ------------------
+    $("#shConnect")?.addEventListener("click", async () => {
+      const r = await api("/api/sheets/config", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: $("#shUrl").value.trim(), secret: $("#shSecret").value }),
+      });
+      if (!r.ok) return toast("❌ " + (r.error || "error"));
+      toast(r.push?.ok ? T("sh_saved") : T("sh_test_fail", { e: r.push?.error || "?" }));
+      accountModal();   // ri-renderizza con lo stato di sincronizzazione fresco
+    });
+    $("#shPushNow")?.addEventListener("click", async () => {
+      const r = await api("/api/sheets/push", { method: "POST" });
+      if (r.ok) { toast(T("sh_pushed")); accountModal(); }
+      else toast("❌ " + (r.error || "error"));
+    });
+    $("#shDisc")?.addEventListener("click", async () => {
+      const r = await api("/api/sheets/config", { method: "DELETE" });
+      if (r.ok) { toast(T("sh_removed")); accountModal(); }
+      else toast("❌ " + (r.error || "error"));
+    });
+    $("#shCopy")?.addEventListener("click", async () => {
+      // Si copia dalla costante GS_CODE, mai dal <pre>: l'auto-traduzione del
+      // browser riscrive il DOM visibile e consegnerebbe codice corrotto.
+      try { await navigator.clipboard.writeText(GS_CODE); toast(T("sh_copied")); }
+      catch {
+        const ta = document.createElement("textarea");
+        ta.value = GS_CODE; document.body.appendChild(ta); ta.select();
+        document.execCommand("copy"); ta.remove(); toast(T("sh_copied"));
+      }
     });
     // CSV con token: fetch + blob (l'header Authorization non passa nei link)
     $("#csvBtn").addEventListener("click", async (e) => {

@@ -15,10 +15,17 @@ import { todayVN } from "./vndate.js";
 // server → senza questa lista un URL ostile trasforma il push in una SSRF
 // verso la rete interna di Render.
 const HOSTS = new Set(["script.google.com", "script.googleusercontent.com"]);
+// Porta di servizio SOLO per l'e2e: il finto Apps Script del test gira su
+// 127.0.0.1, che la whitelist (giustamente) rifiuterebbe. Host extra via env,
+// mai impostata in produzione — su Render la variabile non esiste.
+const TEST_HOSTS = new Set(
+  (process.env.SHEETS_TEST_HOSTS || "").split(",").map((s) => s.trim()).filter(Boolean)
+);
 
 export function validateSheetsUrl(raw) {
   let u;
   try { u = new URL(String(raw || "")); } catch { return { ok: false, error: "URL không hợp lệ" }; }
+  if (TEST_HOSTS.has(u.hostname)) return { ok: true, url: u.toString() }; // solo e2e
   if (u.protocol !== "https:") return { ok: false, error: "Chỉ chấp nhận https" };
   if (!HOSTS.has(u.hostname)) return { ok: false, error: "Chỉ chấp nhận đường dẫn Google Apps Script (script.google.com)" };
   if (u.port && u.port !== "443") return { ok: false, error: "Cổng không hợp lệ" };
@@ -56,6 +63,66 @@ export function buildSheetsPayload(book, { now = new Date() } = {}) {
   ];
 
   return { sheets: { "Sổ thu chi": ledger, "Tổng hợp": summary } };
+}
+
+// ---- Trasporto: push verso l'Apps Script ------------------------------------
+// Apps Script ha un tempo massimo di esecuzione di 6 minuti: un libro con anni
+// di storico non deve mai far scadere il ricevitore. Si tengono le 5.000 righe
+// PIÙ RECENTI (ordinamento ASC ⇒ la coda) e una riga finale spiega il taglio.
+const MAX_LEDGER_ROWS = 5000;
+
+function capLedger(sheets) {
+  const rows = sheets["Sổ thu chi"];
+  if (!Array.isArray(rows) || rows.length - 1 <= MAX_LEDGER_ROWS) return sheets;
+  const dropped = rows.length - 1 - MAX_LEDGER_ROWS;
+  const kept = rows.slice(rows.length - MAX_LEDGER_ROWS);
+  const notice = [
+    `… đã lược bớt ${dropped.toLocaleString("vi-VN")} dòng cũ hơn — xuất CSV trong Sổ Sạch để xem toàn bộ lịch sử`,
+    "", "", "", "", "", "",
+  ];
+  return { ...sheets, "Sổ thu chi": [rows[0], ...kept, notice] };
+}
+
+// Push di un payload verso il deployment dell'utente.
+// ⚠️ Trappola confermata: /exec risponde SEMPRE 302 verso
+// script.googleusercontent.com. redirect:"error" ucciderebbe ogni push;
+// redirect:"follow" cieco riaprirebbe la SSRF che la whitelist chiude.
+// Quindi: redirect:"manual", si segue ESATTAMENTE un hop, e l'host dell'hop
+// viene ri-validato contro la stessa whitelist.
+export async function pushToSheet(url, secret, payload) {
+  const first = validateSheetsUrl(url);
+  if (!first.ok) return { ok: false, error: first.error };
+  const body = JSON.stringify({ secret, sheets: capLedger(payload?.sheets || {}) });
+
+  let res = await fetch(first.url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body,
+    redirect: "manual",
+    signal: AbortSignal.timeout(10_000),
+  });
+
+  if (res.status >= 300 && res.status < 400) {
+    let hopUrl;
+    try { hopUrl = new URL(res.headers.get("location") || "", first.url).toString(); }
+    catch { return { ok: false, error: "Chuyển hướng không hợp lệ từ Apps Script" }; }
+    const hop = validateSheetsUrl(hopUrl);
+    if (!hop.ok) return { ok: false, error: "Chuyển hướng ra ngoài Google — đã chặn vì an toàn" };
+    // Il 302 di Apps Script significa "la risposta si legge QUI": il secondo
+    // passo è un GET senza corpo, come farebbe un browser dopo un POST→302.
+    res = await fetch(hop.url, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(10_000) });
+    if (res.status >= 300 && res.status < 400)
+      return { ok: false, error: "Quá nhiều bước chuyển hướng từ Apps Script" };
+  }
+
+  const text = await res.text();
+  if (!res.ok) return { ok: false, error: `HTTP ${res.status} từ Apps Script` };
+  let out = null;
+  try { out = JSON.parse(text); } catch {}
+  if (!out || typeof out !== "object")
+    return { ok: false, error: "Phản hồi không hợp lệ từ Apps Script — kiểm tra lại đường dẫn /exec" };
+  // { ok:true, at } oppure { ok:false, error } — l'errore del foglio in chiaro
+  return out;
 }
 
 // ---- Debounce per-uid -------------------------------------------------------

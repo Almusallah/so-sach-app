@@ -99,7 +99,9 @@ export async function persistSetting(key) {
 }
 
 export function getBook(uid) {
-  if (!books[uid]) books[uid] = { profile: { name: "", category: "services_goods", revenueEstimate: 0 }, entries: [] };
+  // lang: lingua di bot e web ("vi"|"en"); i libri nati prima del campo non
+  // ce l'hanno — chi legge usa sempre `profile.lang || "vi"`.
+  if (!books[uid]) books[uid] = { profile: { name: "", category: "services_goods", revenueEstimate: 0, lang: "vi" }, entries: [] };
   return books[uid];
 }
 

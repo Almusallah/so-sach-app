@@ -140,7 +140,38 @@ const vnd = (n) => Number(n || 0).toLocaleString("vi-VN") + "đ";
 
 // Il trimestre in un messaggio: è la domanda che il prodotto esiste per
 // rispondere, perché la 01/CNKD si deposita per TRIMESTRE.
-export function formatQuarterMessage(d) {
+// ⚠️ Nella variante inglese i TERMINI FISCALI restano vietnamiti (01/CNKD,
+// tờ khai, GTGT, TNCN, hạn nộp): sono i nomi che l'ufficio imposte e il
+// đại lý thuế usano davvero — un contabile deve ritrovare quelli, con al
+// massimo una glossa inglese accanto.
+export function formatQuarterMessage(d, lang = "vi") {
+  if (lang === "en") {
+    const L = [
+      `📊 Quý ${d.quarter}/${d.year} (quarter) — as of ${vnDate(d.generatedAt)}`,
+      ``,
+      `In (thu):    ${vnd(d.revenue)}`,
+      `Out (chi):   ${vnd(d.expenses)}`,
+      `Gross:       ${vnd(d.net)}`,
+    ];
+    if (d.declaredRevenue) {
+      L.push(`(of which ${vnd(d.declaredRevenue)} is tự khai — self-declared, no receipts)`);
+    }
+    L.push(``);
+    if (d.exempt) {
+      L.push(`✅ Projected full-year revenue ${vnd(d.projection)} — below the 1 tỷ threshold.`);
+      L.push(`No tax due this quarter, but the tờ khai STILL has to be filed.`);
+    } else {
+      L.push(`Provisional tax: ${vnd(d.total)}`);
+      const pctEn = (r) => (r * 100).toFixed(1).replace(".0", "");
+      L.push(`  • GTGT (VAT) ${pctEn(d.rates.vat)}%: ${vnd(d.vat)}`);
+      L.push(`  • TNCN (PIT) ${pctEn(d.rates.pit)}%: ${vnd(d.pit)}`);
+    }
+    L.push(``);
+    L.push(`🗓️ Hạn nộp tờ khai (filing deadline): ${vnDate(d.deadline)}`);
+    L.push(``);
+    L.push(`Draft — check with your đại lý thuế (tax agent) before filing.`);
+    return L.join("\n");
+  }
   const L = [
     `📊 Quý ${d.quarter}/${d.year} — tính đến ${vnDate(d.generatedAt)}`,
     ``,
@@ -169,12 +200,47 @@ export function formatQuarterMessage(d) {
   return L.join("\n");
 }
 
+// Il riepilogo dell'anno ("sổ"/"year"). Prima viveva inline in server.js: da
+// quando esiste la variante inglese DEVE stare qui, accanto alle altre — due
+// copie dello stesso messaggio in due file divergono sempre (è la lezione di
+// commands.js).  d = { year, revenue, expenses, net, projection, crossed, left }.
+export function formatYearMessage(d, lang = "vi") {
+  if (lang === "en") {
+    return (
+      `📒 Book ${d.year}\n\n` +
+      `In (thu):    ${vnd(d.revenue)}\n` +
+      `Out (chi):   ${vnd(d.expenses)}\n` +
+      `Gross:       ${vnd(d.net)}\n\n` +
+      `Projected full year: ${vnd(d.projection)}\n` +
+      (d.crossed
+        ? `⚠️ Past the 1 tỷ threshold — tax is due this quarter. Type "quarter" for the numbers.`
+        : `✅ ${vnd(d.left)} to go before the 1 tỷ threshold.`) +
+      `\n\nType "quarter" for this quarter and the hạn nộp tờ khai (filing deadline).`
+    );
+  }
+  return (
+    `📒 Sổ năm ${d.year}\n\n` +
+    `Thu:      ${vnd(d.revenue)}\n` +
+    `Chi:      ${vnd(d.expenses)}\n` +
+    `Lãi gộp:  ${vnd(d.net)}\n\n` +
+    `Dự kiến cả năm: ${vnd(d.projection)}\n` +
+    (d.crossed
+      ? `⚠️ Đã vượt ngưỡng 1 tỷ — quý này phải nộp thuế. Gõ "quý" để xem số.`
+      : `✅ Còn ${vnd(d.left)} nữa mới tới ngưỡng 1 tỷ.`) +
+    `\n\nGõ "quý" để xem quý này và hạn nộp tờ khai.`
+  );
+}
+
 // Quando la data è stata corretta o indovinata l'utente DEVE saperlo: è
 // l'unico che ha lo scontrino in mano, e una data sbagliata sposta la voce
 // nel trimestre sbagliato della 01/CNKD.
 const DATE_NOTE_VI = {
   swapped: "⚠️ Hoá đơn ghi ngày/tháng — mình hiểu là ngày trên. Sai thì trả lời \"sửa\".",
   guessed: "⚠️ Mình không đọc rõ ngày nên tạm lấy hôm nay. Sai thì trả lời \"sửa\".",
+};
+const DATE_NOTE_EN = {
+  swapped: "⚠️ The date looked day/month swapped — I used the date above. Reply \"undo\" if wrong.",
+  guessed: "⚠️ I couldn't read the date, so I used today. Reply \"undo\" if wrong.",
 };
 
 export function formatEntryMessage(entry, lang = "vi") {
@@ -183,5 +249,39 @@ export function formatEntryMessage(entry, lang = "vi") {
     const note = DATE_NOTE_VI[entry.dateNote];
     return `✅ Đã ghi vào Sổ Sạch:\n${entry.type === "thu" ? "📈 THU" : "📉 CHI"} ${vnd(entry.amount)}\n${entry.counterparty || ""} — ${entry.description || ""}\nNgày: ${entry.date}\n${note ? note + "\n" : ""}\nTrả lời "sửa" nếu cần chỉnh · "quý" xem quý này · "menu" xem tất cả.`;
   }
-  return `✅ Recorded in Sổ Sạch:\n${entry.type === "thu" ? "📈 IN" : "📉 OUT"} ${vnd(entry.amount)}\n${entry.counterparty || ""} — ${entry.description || ""}\nDate: ${entry.date}`;
+  // Variante inglese a PARITÀ di contenuto: nota sulla data e piè di pagina
+  // con i comandi inclusi — un utente EN che perde l'avviso «data indovinata»
+  // deposita la voce nel trimestre sbagliato esattamente come uno VN.
+  const note = DATE_NOTE_EN[entry.dateNote];
+  return `✅ Recorded in Sổ Sạch:\n${entry.type === "thu" ? "📈 IN" : "📉 OUT"} ${vnd(entry.amount)}\n${entry.counterparty || ""} — ${entry.description || ""}\nDate: ${entry.date}\n${note ? note + "\n" : ""}\nReply "undo" to fix · "quarter" for this quarter · "menu" for everything.`;
+}
+
+// La proposta a bassa confidenza: la voce NON è nel libro — il bot mostra ciò
+// che ha capito e chiede. Le opzioni sono NUMERI perché digitare "1" è l'unica
+// cosa che riesce a chiunque su qualunque tastiera; solo "1" salva, tutto il
+// resto scarta in silenzio (vedi src/pending.js).
+export function formatLowConfidenceMessage(entry, lang = "vi") {
+  const vnd = (n) => Number(n || 0).toLocaleString("vi-VN") + "đ";
+  const line = `${entry.type === "thu" ? "📈 THU" : "📉 CHI"} ${vnd(entry.amount)}` +
+    `\n${entry.counterparty || ""}${entry.description ? " — " + entry.description : ""}`;
+  if (lang === "en") {
+    return (
+      `🤔 I read the photo but I'm not sure. My best guess:\n` +
+      line + `\nDate: ${vnDate(entry.date)}\n\n` +
+      `What would you like to do?\n` +
+      `1️⃣ Reply "1" — save exactly as above\n` +
+      `2️⃣ Retake the photo (good light, amount clearly visible) and send it again\n` +
+      `3️⃣ Type it yourself: "thu 2tr4" or "chi 500k"\n\n` +
+      `(If you don't reply, I'll drop this photo after 10 minutes.)`
+    );
+  }
+  return (
+    `🤔 Mình đọc được ảnh nhưng chưa chắc lắm. Mình tạm hiểu là:\n` +
+    line + `\nNgày: ${vnDate(entry.date)}\n\n` +
+    `Bạn chọn giúp mình nhé:\n` +
+    `1️⃣ Trả lời "1" — lưu đúng như trên\n` +
+    `2️⃣ Chụp lại rõ hơn (đủ sáng, thấy rõ số tiền) rồi gửi lại\n` +
+    `3️⃣ Gõ tay: "thu 2tr4" hoặc "chi 500k"\n\n` +
+    `(Không trả lời thì mình bỏ qua ảnh này sau 10 phút.)`
+  );
 }

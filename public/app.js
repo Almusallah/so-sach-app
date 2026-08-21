@@ -188,6 +188,31 @@ const I18N = {
   d_tot: { vi: "TỔNG THUẾ PHẢI NỘP", en: "TOTAL TAX DUE" },
   d_print: { vi: "🖨️ In / Lưu PDF", en: "🖨️ Print / Save PDF" },
   d_close: { vi: "Đóng", en: "Close" },
+  // Google Sheets (modal Tài khoản)
+  sh_title: { vi: "📊 Google Sheets", en: "📊 Google Sheets" },
+  sh_sub: { vi: "Sổ của bạn tự chép sang một Google Sheet do <b>chính bạn</b> sở hữu — xem, chia sẻ, làm báo cáo tuỳ ý. Muốn thu hồi quyền? Xoá deployment trong Apps Script là xong.", en: "Your ledger auto-copies to a Google Sheet <b>you</b> own — view, share, build reports at will. To revoke access, just delete the Apps Script deployment." },
+  sh_url: { vi: "Đường dẫn Apps Script (kết thúc bằng /exec)", en: "Apps Script URL (ends in /exec)" },
+  sh_secret: { vi: "Mã bí mật (SECRET trong Apps Script)", en: "Secret (SECRET in the Apps Script)" },
+  sh_secret_saved: { vi: "Mã bí mật đã lưu — không bao giờ hiển thị lại. Nhập mã mới nếu muốn đổi.", en: "Secret saved — never shown again. Enter a new one to change it." },
+  sh_connect: { vi: "Kết nối", en: "Connect" },
+  sh_disconnect: { vi: "Ngắt kết nối", en: "Disconnect" },
+  sh_push: { vi: "Đẩy ngay", en: "Push now" },
+  sh_last_ok: { vi: "✅ Đồng bộ gần nhất: {t}", en: "✅ Last sync: {t}" },
+  sh_last_fail: { vi: "⚠️ Lần đẩy gần nhất thất bại ({t}) — bấm Đẩy ngay để thử lại.", en: "⚠️ Last push failed ({t}) — hit Push now to retry." },
+  sh_never: { vi: "Chưa đồng bộ lần nào — bấm Đẩy ngay.", en: "Never synced yet — hit Push now." },
+  sh_auto_note: { vi: "Sau khi kết nối, sổ tự đẩy sang Sheet khoảng 30 giây sau mỗi thay đổi.", en: "Once connected, the ledger pushes to your Sheet ~30 seconds after every change." },
+  sh_saved: { vi: "✅ Đã kết nối — dữ liệu thử đã sang Sheet của bạn.", en: "✅ Connected — test data landed in your Sheet." },
+  sh_test_fail: { vi: "⚠️ Đã lưu cấu hình nhưng đẩy thử thất bại: {e}", en: "⚠️ Config saved but the test push failed: {e}" },
+  sh_pushed: { vi: "✅ Đã đẩy sổ sang Google Sheet.", en: "✅ Ledger pushed to your Google Sheet." },
+  sh_removed: { vi: "Đã ngắt kết nối Google Sheets.", en: "Google Sheets disconnected." },
+  sh_help_t: { vi: "Hướng dẫn cài đặt (một lần, ~2 phút)", en: "Setup guide (one time, ~2 minutes)" },
+  sh_step1: { vi: "Tạo một Google Sheet trống.", en: "Create an empty Google Sheet." },
+  sh_step2: { vi: "Mở <b>Tiện ích mở rộng → Apps Script</b> và dán đoạn mã bên dưới.", en: "Open <b>Extensions → Apps Script</b> and paste the code below." },
+  sh_step3: { vi: "Đổi <b>SECRET</b> trong mã thành một chuỗi dài bất kỳ.", en: "Set <b>SECRET</b> in the code to any long random string." },
+  sh_step4: { vi: "Bấm <b>Deploy → New deployment → Web app</b> · Execute as: <b>Me</b> · Who has access: <b>Anyone</b>, rồi sao chép đường dẫn <b>/exec</b>.", en: "Hit <b>Deploy → New deployment → Web app</b> · Execute as: <b>Me</b> · Who has access: <b>Anyone</b>, then copy the <b>/exec</b> URL." },
+  sh_step5: { vi: "Dán đường dẫn + SECRET vào hai ô phía trên và bấm <b>Kết nối</b>.", en: "Paste the URL + SECRET into the two fields above and hit <b>Connect</b>." },
+  sh_copy: { vi: "📋 Sao chép mã", en: "📋 Copy the code" },
+  sh_copied: { vi: "✅ Đã sao chép — dán vào Apps Script.", en: "✅ Copied — paste it into Apps Script." },
 };
 const T = (k, vars) => {
   let s = (I18N[k] || {})[LANG] || (I18N[k] || {}).vi || k;
@@ -592,6 +617,18 @@ async function init() {
   $("#langBtn").addEventListener("click", () => {
     LANG = LANG === "vi" ? "en" : "vi";
     localStorage.setItem("ss_lang", LANG);
+    // Loggato → la scelta si scrive anche sul profilo del libro, così il bot
+    // Zalo risponde nella stessa lingua del sito (web e Zalo devono
+    // concordare). Anonimo → resta solo in localStorage: la sandbox non è un
+    // libro che il bot vedrà mai. Fire-and-forget: un errore di rete non deve
+    // bloccare il toggle visivo.
+    if (localStorage.getItem("ss_token")) {
+      api("/api/profile" + Q, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang: LANG }),
+      }).catch(() => {});
+    }
     applyI18n(); init2();
   });
   refresh();
@@ -612,7 +649,8 @@ async function init2() {
   window.SS?.renderAcct?.();
 }
 
-// Espone gli helper condivisi ad account.js (auth, gói, đại lý thuế).
-window.SS = { api, refresh, toast, showModal, closeModal, vnd };
+// Espone gli helper condivisi ad account.js (auth, gói, đại lý thuế, Sheets).
+// T incluso: la sezione Google Sheets del modal account usa il dizionario I18N.
+window.SS = { api, refresh, toast, showModal, closeModal, vnd, T };
 
 init();

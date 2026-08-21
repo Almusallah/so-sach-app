@@ -536,3 +536,245 @@ test("khai: quý futuro e quý 5 rifiutati con il motivo, mai ignorati", () => {
   assert.match(r5.skipped[0].why, /1-4/);
   assert.equal(b.entries.length, 0, "un rifiuto non deve sporcare il libro");
 });
+
+// ---- Fuzzy matching: il typo da telefono non deve ricevere il menu ----------
+import { matchCommandFuzzy, matchLangCommand } from "../src/commands.js";
+import { formatYearMessage, formatLowConfidenceMessage } from "../src/zalo.js";
+import { makePendingStore } from "../src/pending.js";
+
+test("matchCommandFuzzy: tabella — distanza di edit ≤ 1, mai di più", () => {
+  const cases = [
+    // [input, atteso, perché]
+    ["quyy",     "quarter", "lettera doppia"],
+    ["menuu",    "menu",    "lettera doppia"],
+    ["menw",     "menu",    "sostituzione"],
+    ["suaa",     "fix",     "lettera doppia"],
+    ["undoo",    "fix",     "alias inglese con typo"],
+    ["yearr",    "year",    "alias inglese con typo"],
+    ["boook",    "year",    "book con lettera doppia"],
+    ["khaii",    "khai",    "khai nudo con typo → help"],
+    ["taxx",     "quarter", "alias tax con typo"],
+    ["quarterr", "quarter", "8 lettere, 1 edit"],
+    ["menu",     "menu",    "l'esatto passa anche dal fuzzy (distanza 0)"],
+    ["sua la",   "fix",     "sua lai monco di 1"],
+    ["sooo",     null,      "distanza 2 da 'so' — niente indovinelli"],
+    ["hepl",     null,      "trasposizione = distanza 2, fuori di proposito"],
+    ["xin chao", null,      "testo libero"],
+  ];
+  for (const [raw, want, why] of cases) {
+    assert.equal(matchCommandFuzzy(raw), want, `${why}: ${JSON.stringify(raw)}`);
+  }
+});
+
+test("matchCommandFuzzy: pareggio fra due comandi → NESSUN match", () => {
+  // "soa" dista 1 da "sua"/"xoa" (fix) E da "so" (year): indovinare a metà
+  // è peggio che chiedere di riscrivere.
+  assert.equal(matchCommandFuzzy("soa"), null);
+});
+
+test("matchCommandFuzzy: parole vietnamite VERE non diventano mai comandi", () => {
+  // Ognuna dista ≤ 1 edit da un comando (o vi arriva via normalize) ma è una
+  // parola di conversazione: "của" che diventasse "sửa" CANCELLEREBBE una
+  // voce del libro; "hai" riceverebbe la sintassi del tự khai. Le tre
+  // sentinelle del rilascio: "quà", "sư", "mua".
+  const words = [
+    "quà", "quá", "qua", "sư", "mua",                    // sentinelle
+    "của", "cua", "bữa", "vừa", "dưa", "đùa", "dừa",     // → sua/xoa (fix)
+    "hoa", "toà", "xưa", "xoay",
+    "thưa", "thua", "thế", "tài",                        // → thue/tax (quarter)
+    "khi", "khá", "hai", "hài", "chai",                  // → khai
+    "sao",                                               // → so (year)
+  ];
+  for (const w of words) {
+    assert.equal(matchCommand(w), null, `exact: ${w}`);
+    assert.equal(matchCommandFuzzy(w), null, `fuzzy: ${w}`);
+  }
+  // …e i typo veri continuano a passare: la stop-list non spegne il fuzzy.
+  assert.equal(matchCommandFuzzy("quyy"), "quarter");
+  assert.equal(matchCommandFuzzy("suaa"), "fix");
+  assert.equal(matchCommandFuzzy("khaii"), "khai");
+});
+
+test("matchCommandFuzzy: i guardrail — soldi, cifre, codici, input corti", () => {
+  const cases = [
+    ["thu",    "una parola-denaro nuda non è un comando (dista 1 da 'thue')"],
+    ["chi",    "idem"],
+    ["mua",    "idem"],
+    ["ban",    "idem"],
+    ["500k",   "un importo non si fuzza mai"],
+    ["2tr4",   "un importo non si fuzza mai"],
+    ["13",     "dista 1 da 'q3' ma è un numero — mai"],
+    ["130",    "qualunque cifra nell'input spegne il fuzzy"],
+    ["q33",    "idem, anche vicino a 'q3'"],
+    ["ABC123", "forma da codice di collegamento (6 alfanumerici)"],
+    ["summry", "6 alfanumerici = potenziale codice, anche se pare 'summary'"],
+    ["qu",     "sotto 3 caratteri un edit cambia mezza parola"],
+    ["so",     "idem (l'esatto 'so' passa da matchCommand, non da qui)"],
+    ["khai quy 1 thu 360tr", "gli argomenti di khai non si fuzzano (cifre)"],
+    ["",       "vuoto"],
+  ];
+  for (const [raw, why] of cases) {
+    assert.equal(matchCommandFuzzy(raw), null, `${why}: ${JSON.stringify(raw)}`);
+  }
+});
+
+// ---- Alias inglesi nel registro ---------------------------------------------
+test("matchCommand: gli alias inglesi arrivano allo stesso ramo", () => {
+  for (const t of ["quarter", "QUARTER", "q3", "tax"]) assert.equal(matchCommand(t), "quarter", t);
+  for (const t of ["year", "book", "summary", "Book "]) assert.equal(matchCommand(t), "year", t);
+  for (const t of ["undo", "delete", "fix", "UNDO"]) assert.equal(matchCommand(t), "fix", t);
+  for (const t of ["commands", "start", "help"]) assert.equal(matchCommand(t), "menu", t);
+});
+
+test("khai resta SOLO vietnamita: nessun alias inglese, per scelta fiscale", () => {
+  const khai = COMMANDS.find((c) => c.key === "khai");
+  assert.deepEqual(khai.match, ["khai"]);
+  for (const t of ["declare", "opening", "backfill"]) {
+    assert.equal(matchCommand(t), null, t);
+    assert.equal(matchCommandFuzzy(t), null, t);
+  }
+});
+
+// ---- Cambio lingua: esatto dopo normalize, MAI fuzzy ------------------------
+test("matchLangCommand: le tre forme esatte, in ogni grafia", () => {
+  for (const t of ["english", "English", " ENGLISH "]) assert.equal(matchLangCommand(t), "en", t);
+  for (const t of ["tiếng việt", "tieng viet", "TIENG VIET", "Tiếng  Việt"]) assert.equal(matchLangCommand(t), "vi", t);
+});
+
+test("matchLangCommand: niente fuzzy — un typo NON cambia lingua", () => {
+  for (const t of ["englsh", "englishh", "en", "vietnamese", "tieng", "viet", "", null])
+    assert.equal(matchLangCommand(t), null, JSON.stringify(t));
+});
+
+// ---- Menu e messaggi in inglese: parità di contenuto, termini fiscali VN ----
+test("menuText EN: elenca ogni comando e tiene i termini fiscali vietnamiti", () => {
+  const txt = menuText({ lang: "en" });
+  for (const c of COMMANDS) {
+    assert.ok(c.label_en && c.desc_en, `comando senza etichetta EN: ${c.key}`);
+    assert.ok(txt.includes(c.label_en), `manca dal menu EN: ${c.key}`);
+  }
+  assert.ok(txt.includes("tờ khai"), "il termine fiscale resta vietnamita");
+  assert.ok(txt.includes('"tiếng việt"'), "il menu EN dice come tornare al vietnamita");
+  // e la variante vietnamita non è cambiata
+  assert.ok(menuText().includes('Gõ "sổ"'));
+});
+
+test("formatEntryMessage EN: nota sulla data e piè di pagina, come in VN", () => {
+  const entry = { type: "chi", amount: 30000, date: "2026-08-10", counterparty: "JMART",
+    description: "đậu phụ", dateNote: "guessed" };
+  const en = formatEntryMessage(entry, "en");
+  assert.match(en, /Recorded/);
+  assert.match(en, /30\.000/, "formato importo vietnamita anche in EN");
+  assert.match(en, /I couldn't read the date/, "l'avviso data DEVE esserci anche in EN");
+  assert.match(en, /"undo"/, "il piè di pagina EN promette i comandi EN");
+  assert.match(en, /"menu"/);
+  const swapped = formatEntryMessage({ ...entry, dateNote: "swapped" }, "en");
+  assert.match(swapped, /swapped/);
+  // la variante vietnamita non è cambiata
+  assert.match(formatEntryMessage(entry), /Trả lời "sửa"/);
+});
+
+test("formatQuarterMessage EN: GTGT/TNCN/tờ khai restano vietnamiti", () => {
+  const book = { profile: { name: "Quán Cô Ba", category: "services_goods" }, entries: [] };
+  for (let d = 0; d < 40; d++) {
+    book.entries.push({ id: "e" + d, type: "thu", amount: 30_000_000,
+      date: `2026-07-${String((d % 30) + 1).padStart(2, "0")}`, provenance: "photo" });
+  }
+  const msg = formatQuarterMessage(buildDeclaration(book, { now: new Date("2026-08-19T00:00:00Z") }), "en");
+  assert.match(msg, /Provisional tax/);
+  assert.match(msg, /GTGT/, "il nome fiscale resta");
+  assert.match(msg, /TNCN/, "il nome fiscale resta");
+  assert.match(msg, /Hạn nộp tờ khai/, "la scadenza col suo nome vero");
+  assert.match(msg, /đại lý thuế/, "il professionista col suo nome vero");
+  assert.match(msg, /31\/10\/2026/);
+});
+
+test("formatQuarterMessage EN: l'esente sa comunque di dover depositare", () => {
+  const book = { profile: { category: "services_goods" }, entries: [
+    { id: "a", type: "thu", amount: 5_000_000, date: "2026-07-10", provenance: "photo" }] };
+  const msg = formatQuarterMessage(buildDeclaration(book, { now: new Date("2026-08-19T00:00:00Z") }), "en");
+  assert.match(msg, /tờ khai STILL has to be filed/);
+  assert.ok(!/Provisional tax/.test(msg));
+});
+
+test("formatYearMessage: variante VI identica a prima, EN a parità di contenuto", () => {
+  const d = { year: 2026, revenue: 300, expenses: 50, net: 250,
+    projection: 700, crossed: false, left: 999_999_300 };
+  const vi = formatYearMessage(d);
+  assert.match(vi, /📒 Sổ năm 2026/);
+  assert.match(vi, /Còn 999\.999\.300đ nữa/);
+  assert.match(vi, /hạn nộp tờ khai/);
+  const en = formatYearMessage(d, "en");
+  assert.match(en, /Book 2026/);
+  assert.match(en, /1 tỷ threshold/);
+  assert.match(en, /hạn nộp tờ khai/, "il termine fiscale resta anche in EN");
+  const crossed = formatYearMessage({ ...d, crossed: true }, "en");
+  assert.match(crossed, /tax is due this quarter/i);
+});
+
+// ---- Estrazione a bassa confidenza: la proposta e la sua attesa -------------
+test("formatLowConfidenceMessage: mostra la voce letta e le tre opzioni", () => {
+  const entry = { type: "chi", amount: 30000, counterparty: "JMART", description: "đậu phụ", date: "2026-08-10" };
+  const vi = formatLowConfidenceMessage(entry);
+  assert.match(vi, /CHI 30\.000đ/);
+  assert.match(vi, /JMART/);
+  assert.match(vi, /10\/08\/2026/, "data in formato vietnamita");
+  assert.match(vi, /Trả lời "1"/);
+  assert.match(vi, /thu 2tr4/, "l'opzione 3 insegna la sintassi");
+  assert.match(vi, /10 phút/, "dice quanto dura l'attesa");
+  const en = formatLowConfidenceMessage(entry, "en");
+  assert.match(en, /Reply "1"/);
+  assert.match(en, /chi 500k/);
+  assert.match(en, /10 minutes/);
+});
+
+test("pendingStore: put/take — una volta sola, poi sparita", () => {
+  let t = 1_000_000;
+  const s = makePendingStore({ ttlMs: 1000, now: () => t });
+  s.put("u1", { amount: 42 });
+  assert.equal(s.size(), 1);
+  assert.deepEqual(s.take("u1"), { amount: 42 });
+  assert.equal(s.take("u1"), null, "take consuma: la seconda lettura è vuota");
+  assert.equal(s.size(), 0);
+});
+
+test("pendingStore: il TTL — al limite vale, oltre no", () => {
+  let t = 0;
+  const s = makePendingStore({ ttlMs: 1000, now: () => t });
+  s.put("u1", "a");
+  t = 1000;                                  // esattamente al TTL: ancora valida
+  assert.equal(s.take("u1"), "a");
+  s.put("u1", "b");
+  t = 2001;                                  // oltre il TTL: scaduta
+  assert.equal(s.take("u1"), null, "scaduta → null");
+  assert.equal(s.size(), 0, "e comunque rimossa");
+});
+
+test("pendingStore: una nuova proposta SOSTITUISCE la precedente", () => {
+  let t = 0;
+  const s = makePendingStore({ ttlMs: 1000, now: () => t });
+  s.put("u1", "vecchia");
+  s.put("u1", "nuova");
+  assert.equal(s.size(), 1, "mai due proposte in coda per lo stesso uid");
+  assert.equal(s.take("u1"), "nuova");
+});
+
+test("pendingStore: la potatura tiene pulita la mappa (foto abbandonate)", () => {
+  let t = 0;
+  const s = makePendingStore({ ttlMs: 1000, now: () => t });
+  s.put("u1", "a");
+  s.put("u2", "b");
+  t = 5000;                                  // entrambe scadute da un pezzo
+  s.put("u3", "c");                          // il put successivo le spazza
+  assert.equal(s.size(), 1, "restano solo le proposte vive");
+  assert.equal(s.take("u3"), "c");
+});
+
+test("pendingStore: gli uid non si mescolano", () => {
+  let t = 0;
+  const s = makePendingStore({ ttlMs: 1000, now: () => t });
+  s.put("u1", "mia");
+  s.put("u2", "sua");
+  assert.equal(s.take("u1"), "mia");
+  assert.equal(s.take("u2"), "sua");
+});

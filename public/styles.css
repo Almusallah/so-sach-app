@@ -364,5 +364,20 @@ footer a { color: var(--giada); font-weight: 600; }
 .plan .price{font-size:1.25rem;font-weight:800;margin:6px 0 10px}
 .plan .price small{font-weight:500;color:var(--grigio)}
 .share-foot{margin-top:12px;padding-top:9px;border-top:1px dashed var(--bordo);font-size:.8rem;color:var(--grigio);text-align:center}
+
+/* ---- Google Sheets (modal Tài khoản) ----
+   Regola di casa: solo token di :root — niente esadecimali nudi. */
+.sheets-box{border-top:1px dashed var(--bordo);margin-top:16px;padding-top:14px}
+.sheets-head b{font-size:.95rem;color:var(--giada-ink)}
+.sheets-status{font-size:.82rem;font-weight:600;border-radius:9px;padding:7px 11px;margin-bottom:11px;background:var(--carta2);color:var(--grigio)}
+.sheets-status.ok{background:var(--giada-wash);color:var(--giada-scuro)}
+.sheets-status.fail{background:var(--rosso-wash);color:var(--rosso-scuro)}
+.sheets-hint{display:block;font-size:.76rem;color:var(--grigio);margin-top:5px;line-height:1.5}
+.gs-help{margin-top:12px;border:1px solid var(--bordo);border-radius:12px;padding:10px 12px;background:var(--carta2)}
+.gs-help summary{cursor:pointer;font-weight:700;font-size:.85rem;color:var(--giada-ink)}
+.gs-help[open] summary{margin-bottom:8px}
+.gs-steps{margin:0 0 10px;padding-left:20px;font-size:.82rem;color:var(--testo);line-height:1.6}
+.gs-steps li{margin-bottom:4px}
+.gs-code{background:var(--giada-ink);color:var(--carta);border-radius:10px;padding:12px 14px;font-size:10.5px;line-height:1.55;overflow:auto;max-height:240px;white-space:pre;margin:0 0 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 @media(max-width:560px){.plans{grid-template-columns:1fr}
   .pill{max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
