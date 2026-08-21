@@ -142,7 +142,7 @@
         <div class="modal-head">💬 ${t("Kết nối Zalo", "Connect Zalo")}</div>
         <div class="modal-body">
           <div class="conf-note">${t("Mở OA <b>Sổ Sạch</b> trên Zalo và gửi mã này vào khung chat:", "Open the <b>Sổ Sạch</b> OA on Zalo and send this code in the chat:")}</div>
-          <div style="font-size:2.1rem;font-weight:800;letter-spacing:6px;text-align:center;margin:16px 0;color:#0b3d2e;font-family:monospace">${r.code}</div>
+          <div style="font-size:2.1rem;font-weight:800;letter-spacing:6px;text-align:center;margin:16px 0;color:var(--giada-ink);font-family:monospace">${r.code}</div>
           <div class="disc">${t("Mã có hiệu lực 15 phút. Sau khi gửi, mọi hoá đơn bạn chụp trên Zalo sẽ về đúng tài khoản này.", "Code valid 15 minutes. After you send it, every receipt you snap on Zalo lands in this account.")}</div>
           <button class="btn solid block" id="zDone" style="margin-top:12px">${t("Xong", "Done")}</button>
         </div>`);

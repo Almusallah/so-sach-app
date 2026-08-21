@@ -273,7 +273,7 @@ async function renderAgency() {
   const d = await api("/api/agent/demo");
   if (!d.ok) { box.innerHTML = ""; return; }
   const p = d.portfolio;
-  const seg = (g, n) => n ? `<i class="g${g}" style="flex:${n}" title="${g}: ${n}">${n}</i>` : "";
+  const seg = (g, n) => n ? `<i class="g${g}" style="flex:${n}" title="${g}: ${n}"><b>${n}</b></i>` : "";
   box.innerHTML = `
     <div class="ag-head">
       <div><b>🧑‍💼 ${d.agency.name}</b><span>${d.agency.district} · ${LANG === "vi" ? "Mã mời" : "Invite code"} <b>${d.agency.code}</b> · ${d.quarter}</span></div>

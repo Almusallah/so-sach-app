@@ -31,12 +31,12 @@ pdfmetrics.registerFontFamily("SS-Sans", normal="SS-Sans", bold="SS-Sans-Bold",
 
 PAGE = landscape(A4)
 W, H = PAGE
-GIADA = HexColor("#0b3d2e"); GIADA_MID = HexColor("#14523e")
-GOLD = HexColor("#c8922a"); GOLD_LT = HexColor("#e9c46a")
-CARTA = HexColor("#f7f5ef"); CARTA_DK = HexColor("#eee9dd")
-INK = HexColor("#20241f"); MUTED = HexColor("#5f6a5f"); BORDER = HexColor("#d8d2c2")
+GIADA = HexColor("#0B6E4F"); GIADA_MID = HexColor("#084C38")
+GOLD = HexColor("#D4A017"); GOLD_LT = HexColor("#E8C35A")
+CARTA = HexColor("#FBF7EC"); CARTA_DK = HexColor("#F1EAD9")
+INK = HexColor("#241F18"); MUTED = HexColor("#6E675C"); BORDER = HexColor("#E5DCC8")
 WHITE = HexColor("#ffffff"); MINT = HexColor("#cfe0d6")
-ROSSO = HexColor("#a8352b")
+ROSSO = HexColor("#C0453B")
 
 st_cell  = ParagraphStyle("cell",  fontName="SS-Sans", fontSize=10, leading=13.6, textColor=INK)
 st_cellb = ParagraphStyle("cellb", parent=st_cell, fontName="SS-Sans-Bold")

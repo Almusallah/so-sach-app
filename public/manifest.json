@@ -4,8 +4,8 @@
   "description": "Chụp hoá đơn → sổ thu chi → Điểm Sổ Sạch → tờ khai thuế soạn sẵn.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f9f7f1",
-  "theme_color": "#0b3d2e",
+  "background_color": "#FBF7EC",
+  "theme_color": "#05392B",
   "lang": "vi",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
