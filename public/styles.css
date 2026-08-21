@@ -39,10 +39,17 @@
   /* Variante testo del voto B: #4F8F3B regge come anello/segmento (grafica),
      non come testo piccolo su fondo chiaro (3.9:1). Stessa foglia, più scura. */
   --voto-b-scuro: #3A6F26;
-  --ombra: 0 2px 10px rgba(5, 57, 43, .07);
-  --ombra-md: 0 6px 24px rgba(5, 57, 43, .10);
-  --ombra-lg: 0 18px 50px rgba(5, 57, 43, .20);
+  /* Ombre: ricetta meInvoice — due layer giada-tinted a bassa opacità (.05/.02)
+     con spread NEGATIVO, così l'ombra resta sotto la card e non sbava ai lati.
+     I tagli md/lg salgono di raggio, non di nero. */
+  --ombra: 0 1px 2px rgba(5, 57, 43, .05), 0 4px 10px -2px rgba(5, 57, 43, .02);
+  --ombra-md: 0 4px 8px -2px rgba(5, 57, 43, .05), 0 12px 24px -6px rgba(5, 57, 43, .02);
+  --ombra-lg: 0 12px 24px -6px rgba(5, 57, 43, .10), 0 32px 64px -16px rgba(5, 57, 43, .08);
+  /* Rampa raggi (scheletro meInvoice): 24 piastre / 18 legacy / 16 card / 12 bottoni. */
   --r: 18px;
+  --r-lg: 24px;
+  --r-md: 16px;
+  --r-sm: 12px;
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -59,32 +66,47 @@ h1, h2, h3 { letter-spacing: -.01em; }
 .brand-mark { filter: drop-shadow(0 2px 4px rgba(5,57,43,.18)); }
 .nav-actions { display: flex; gap: 8px; align-items: center; }
 
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: none; border-radius: 12px; padding: 10px 16px; font-weight: 700; font-size: 14px; transition: transform .12s, filter .15s, box-shadow .15s; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: none; border-radius: var(--r-sm); padding: 10px 16px; font-weight: 700; font-size: 14px; transition: transform .12s, filter .15s, box-shadow .15s; }
 .btn:active { transform: translateY(1px) scale(.99); }
-.btn.solid { background: linear-gradient(160deg, var(--giada) 0%, var(--giada-scuro) 100%); color: var(--bianco); box-shadow: 0 3px 12px rgba(11,110,79,.28); }
+.btn.solid { background: linear-gradient(68deg, var(--giada-scuro), var(--giada)); color: var(--bianco); box-shadow: 0 3px 12px rgba(11,110,79,.28); }
 .btn.solid:hover { filter: brightness(1.08); box-shadow: 0 6px 18px rgba(11,110,79,.34); transform: translateY(-1px); }
 .btn.ghost { background: transparent; border: 1.5px solid var(--bordo); color: var(--testo); }
 .btn.ghost:hover { border-color: var(--giada); color: var(--giada-ink); }
-.btn.outline { background: transparent; border: 1.5px solid rgba(255,255,255,.55); color: var(--bianco); }
-.btn.outline:hover { background: rgba(255,255,255,.1); }
 .btn.big { padding: 14px 26px; font-size: 15px; border-radius: 14px; }
 .btn.block { width: 100%; padding: 13px; }
 
-/* ---- Hero ---- */
-.hero { position: relative; background: radial-gradient(900px 460px at 88% -10%, rgba(212,160,23,.25), transparent 55%), linear-gradient(150deg, var(--giada-ink) 0%, var(--giada-scuro) 60%, var(--giada) 100%); color: var(--bianco); overflow: hidden; }
-.hero::before { content: ""; position: absolute; inset: 0; background-image: radial-gradient(rgba(255,255,255,.07) 1px, transparent 1.4px); background-size: 26px 26px; pointer-events: none; }
-.hero-inner { position: relative; max-width: 1100px; margin: 0 auto; padding: 58px 20px 66px; display: grid; grid-template-columns: 1.05fr .95fr; gap: 42px; align-items: center; }
-.eyebrow { display: inline-block; font-size: 12.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--oro-chiaro); margin-bottom: 14px; background: rgba(212,160,23,.12); border: 1px solid rgba(212,160,23,.35); padding: 6px 12px; border-radius: 999px; }
-.hero h1 { font-size: clamp(34px, 5vw, 56px); line-height: 1.06; margin: 0 0 16px; font-weight: 800; text-shadow: 0 2px 20px rgba(0,0,0,.18); }
-.hero p { font-size: 16.5px; opacity: .93; max-width: 500px; margin: 0 0 26px; }
-.hero-cta { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
-.hero-cta .solid { background: linear-gradient(160deg, var(--oro-chiaro), var(--oro)); color: var(--giada-ink); box-shadow: 0 6px 22px rgba(212,160,23,.4); }
-.hero-cta .solid:hover { box-shadow: 0 10px 28px rgba(212,160,23,.5); }
+/* ---- Coppia CTA unica (scheletro meInvoice) --------------------------------
+   UNA sola coppia, timbrata identica dopo hero / #how / #ways / prima del
+   footer. Primario: gradiente giada, testo bianco. Secondario: bianco con
+   hairline giada e "→" nel testo HTML (Be Vietnam Pro copre U+2192 — mai
+   la freccia in content: CSS, dove il fallback la perde). */
+.cta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.cta-row.center { justify-content: center; margin-top: 34px; }
+.cta-primary, .cta-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; padding: 12px 26px; border-radius: var(--r-sm); font-weight: 700; font-size: 15px; transition: transform .12s, filter .15s, box-shadow .15s; }
+.cta-primary { background: linear-gradient(68deg, var(--giada-scuro), var(--giada)); color: var(--bianco); box-shadow: 0 3px 12px rgba(11,110,79,.28); }
+.cta-primary:hover { filter: brightness(1.08); box-shadow: 0 6px 18px rgba(11,110,79,.34); transform: translateY(-1px); }
+.cta-secondary { background: var(--bianco); border: 1.5px solid var(--giada); color: var(--giada-scuro); }
+.cta-secondary:hover { background: var(--giada-wash2); transform: translateY(-1px); }
+
+/* ---- Hero ----------------------------------------------------------------
+   Disciplina d'inchiostro (lezione meInvoice): l'hero NON è più un blocco
+   giada pieno — è inchiostro caldo su carta, e la giada resta ai CTA, ai
+   link e alla parola-gradiente dell'H1. La carta crema fa da firma. */
+.hero { position: relative; background: radial-gradient(900px 460px at 88% -10%, rgba(212,160,23,.10), transparent 55%), var(--carta); color: var(--testo); overflow: hidden; }
+.hero-inner { position: relative; max-width: 1100px; margin: 0 auto; padding: 64px 20px 72px; display: grid; grid-template-columns: 1.05fr .95fr; gap: 42px; align-items: center; }
+/* Chip decreto: pastiglia rosso-wash sopra l'H1, come il chip di conformità
+   di meInvoice. Cita il decreto CORRENTE (254/2026/NĐ-CP). */
+.decree-chip { display: inline-block; font-size: 12.5px; font-weight: 700; color: var(--rosso-scuro); margin-bottom: 16px; background: var(--rosso-wash); border: 1px solid rgba(192,69,59,.28); padding: 7px 14px; border-radius: 999px; }
+.hero h1 { font-size: clamp(34px, 4.6vw, 52px); line-height: 1.12; margin: 0 0 16px; font-weight: 800; color: var(--giada-ink); }
+/* Parola-gradiente: la sola giada concessa al titolo. */
+.hero-grad { background: linear-gradient(68deg, var(--giada-scuro), var(--giada)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.hero p { font-size: 17px; color: var(--grigio); max-width: 500px; margin: 0 0 26px; line-height: 1.6; }
+.hero .cta-row { margin-bottom: 24px; }
 .hero-trust { display: flex; gap: 10px; flex-wrap: wrap; }
-.hero-trust span { background: rgba(255,255,255,.09); border: 1px solid rgba(255,255,255,.16); padding: 6px 13px; border-radius: 999px; font-size: 12.5px; backdrop-filter: blur(4px); }
+.hero-trust span { background: var(--bianco); border: 1px solid var(--bordo); color: var(--testo); padding: 6px 13px; border-radius: 999px; font-size: 12.5px; box-shadow: var(--ombra); }
 
 /* ---- Chat mock ---- */
-.hero-chat { background: var(--bianco); border-radius: 22px; box-shadow: var(--ombra-lg), 0 0 0 6px rgba(255,255,255,.06); overflow: hidden; color: var(--testo); animation: rise .7s ease both; max-width: 420px; justify-self: end; width: 100%; }
+.hero-chat { background: var(--bianco); border-radius: 22px; box-shadow: var(--ombra-lg), 0 0 0 1px rgba(5,57,43,.06); overflow: hidden; color: var(--testo); animation: rise .7s ease both; max-width: 420px; justify-self: end; width: 100%; }
 @keyframes rise { from { transform: translateY(18px); opacity: 0; } to { transform: none; opacity: 1; } }
 .chat-head { background: linear-gradient(120deg, var(--zalo), var(--zalo-scuro)); color: var(--bianco); font-weight: 700; padding: 13px 16px; font-size: 14px; }
 .chat-body { padding: 14px; display: flex; flex-direction: column; gap: 10px; background: var(--blu-wash); }
@@ -99,13 +121,18 @@ h1, h2, h3 { letter-spacing: -.01em; }
 .s-item b { font-size: 25px; font-weight: 800; color: var(--giada-ink); display: block; line-height: 1.15; }
 .s-item span { font-size: 12.5px; font-weight: 600; color: rgba(5,57,43,.78); }
 
-/* ---- Sections ---- */
+/* ---- Sections -------------------------------------------------------------
+   Atti da ~80px tra le sezioni maggiori; le sezioni vivono su PIASTRE
+   raggio 24 alternate bianco / giada-wash (scheletro meInvoice). */
 main { max-width: 1100px; margin: 0 auto; padding: 16px 20px 40px; }
-section { margin-top: 56px; }
-.section-head { margin-bottom: 22px; }
+section { margin-top: 80px; }
+.plate { border-radius: var(--r-lg); padding: 56px 48px; }
+.plate-bianca { background: var(--bianco); border: 1px solid var(--bordo); box-shadow: var(--ombra); }
+.plate-wash { background: var(--giada-wash); }
+.section-head { margin-bottom: 26px; }
 .kicker { font-size: 11.5px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--giada); margin-bottom: 5px; }
-.section-head h2 { font-size: clamp(24px, 3vw, 34px); margin: 0 0 6px; color: var(--giada-ink); font-weight: 800; }
-.section-head p { margin: 0; color: var(--grigio); font-size: 16px; }
+.section-head h2 { font-size: clamp(25px, 3.2vw, 36px); line-height: 1.2; margin: 0 0 8px; color: var(--giada-ink); font-weight: 800; }
+.section-head p { margin: 0; color: var(--grigio); font-size: 16.5px; max-width: 640px; }
 
 .how-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .how-card { background: var(--bianco); border: 1px solid var(--bordo); border-radius: var(--r); padding: 24px 20px; box-shadow: var(--ombra); transition: transform .18s, box-shadow .18s; }
@@ -131,6 +158,29 @@ section { margin-top: 56px; }
 .way-tag.soon { background: var(--oro-wash); color: var(--oro-scuro); }
 .ways-note { margin: 22px 0 0; padding: 14px 18px; background: var(--carta2); border-radius: var(--r); font-size: 16px; color: var(--testo); line-height: 1.65; }
 @media (max-width: 860px) { .ways-wrap { grid-template-columns: 1fr; gap: 22px; } }
+
+/* ---- Prova (ordine meInvoice, numeri nostri) ------------------------------
+   Contatore lista d'attesa → UNO screenshot vero in cornice-dispositivo con
+   chip d'annotazione bianche → riga di conformità. Niente FAQ: non esiste. */
+.proof-count { font-size: 15px; font-weight: 600; color: var(--testo); margin-bottom: 26px; }
+.proof-count b { color: var(--giada-scuro); font-size: 22px; font-weight: 800; }
+.proof-count:empty { display: none; }
+.shot-frame { position: relative; max-width: 440px; margin: 0 auto; background: var(--bianco); border: 1px solid var(--bordo); border-radius: var(--r-lg); padding: 10px; box-shadow: var(--ombra-lg); }
+.shot-frame img { display: block; width: 100%; height: auto; border-radius: var(--r-md); }
+/* Chip d'annotazione: bianche, raggio 12, galleggiano sui bordi dello shot. */
+.shot-chip { position: absolute; background: var(--bianco); border: 1px solid var(--bordo); border-radius: var(--r-sm); padding: 8px 13px; font-size: 12.5px; font-weight: 700; color: var(--giada-ink); box-shadow: var(--ombra-md); white-space: nowrap; }
+.shot-chip.pos-a { top: 13%; left: -12%; }
+.shot-chip.pos-b { top: 46%; right: -14%; }
+/* La chip d'avviso è l'unico accento oro concesso alla prova. */
+.shot-chip.warn { border: 1.5px solid var(--oro); color: var(--oro-scuro); background: var(--oro-wash); bottom: 12%; left: -9%; }
+.proof-legal { margin: 30px auto 0; max-width: 640px; text-align: center; font-size: 13px; color: var(--grigio); line-height: 1.65; }
+.proof-legal b { color: var(--testo); }
+@media (max-width: 700px) {
+  /* Su mobile le chip rientrano nella cornice: fuori taglierebbero il viewport. */
+  .shot-chip.pos-a { left: -6px; }
+  .shot-chip.pos-b { right: -6px; }
+  .shot-chip.warn { left: -6px; }
+}
 
 /* ---- App ---- */
 .app-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
@@ -271,10 +321,9 @@ section { margin-top: 56px; }
 @media (max-width: 480px) { .ag-stats { grid-template-columns: repeat(2, 1fr); } }
 
 /* ---- Zalo banner ---- */
-.zalo-banner { background: linear-gradient(120deg, var(--blu-wash), rgba(0,104,255,.13)); border: 1px solid rgba(0,104,255,.22); border-radius: 22px; padding: 32px; display: grid; grid-template-columns: 1fr auto; gap: 22px; align-items: center; }
+.zalo-banner { background: linear-gradient(120deg, var(--blu-wash), rgba(0,104,255,.13)); border: 1px solid rgba(0,104,255,.22); border-radius: var(--r-lg); padding: 40px 48px; display: grid; grid-template-columns: 1fr auto; gap: 22px; align-items: center; }
 .zalo-banner h2 { margin: 0 0 6px; color: var(--zalo-ink); font-size: 24px; font-weight: 800; }
 .zalo-banner p { margin: 0; color: rgba(11,58,117,.82); font-size: 16px; max-width: 560px; }
-.zalo-banner .solid { box-shadow: 0 6px 20px rgba(0,104,255,.3); }
 
 footer { border-top: 1px solid var(--bordo); margin-top: 60px; background: var(--bianco); }
 .foot-inner { max-width: 1100px; margin: 0 auto; padding: 20px 20px 8px; display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; color: var(--grigio); flex-wrap: wrap; }
@@ -313,6 +362,9 @@ footer a { color: var(--giada); font-weight: 600; }
   .how-grid, .app-grid { grid-template-columns: 1fr; }
   .strip-inner { grid-template-columns: 1fr; gap: 10px; }
   .zalo-banner { grid-template-columns: 1fr; padding: 24px; }
+  /* Atti e piastre rientrano: 80/56-48 sono misure da desktop. */
+  section { margin-top: 52px; }
+  .plate { padding: 28px 18px; }
 }
 @media (max-width: 560px) {
   .brand { font-size: 18px; }

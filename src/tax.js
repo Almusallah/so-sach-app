@@ -1,8 +1,10 @@
 // ============================================================================
 //  Sổ Sạch — motore fiscale per hộ kinh doanh (regime 2026, post-khoán).
 //  ATTENZIONE PROTOTIPO: aliquote e soglie codificate dalle norme citate nel
-//  README (Circ. 40/2021/TT-BTC per le aliquote %, Decreto 70/2025 e riforma
-//  2026 per le soglie). Vanno validate con un đại lý thuế prima dell'uso reale.
+//  README (Circ. 40/2021/TT-BTC per le aliquote %; per l'e-invoice il vecchio
+//  Decreto 70/2025 è stato abrogato e sostituito dal Nghị định 254/2026/NĐ-CP,
+//  in vigore dal 01/07/2026, che oggi regge la soglia). Vanno validate con un
+//  đại lý thuế prima dell'uso reale.
 // ============================================================================
 import { todayVN } from "./vndate.js";
 
@@ -12,7 +14,9 @@ export const THRESHOLDS = {
   // 1 miliardo dal 01/01/2026 (Decreto 141/2026/NĐ-CP, modifica il 68/2026).
   // Da validare con un đại lý thuế; override rapido via TAX_FREE_THRESHOLD.
   taxFree: Number(process.env.TAX_FREE_THRESHOLD || 1_000_000_000),
-  // Da questa soglia: obbligo e-invoice da registratore di cassa (Decreto 70/2025).
+  // Da questa soglia: obbligo e-invoice da registratore di cassa — introdotto
+  // dal Decreto 70/2025, oggi abrogato e sostituito dal Nghị định 254/2026/NĐ-CP
+  // (in vigore dal 01/07/2026), che è la norma da citare.
   eInvoice: Number(process.env.EINVOICE_THRESHOLD || 1_000_000_000),
 };
 

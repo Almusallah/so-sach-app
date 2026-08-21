@@ -3,6 +3,10 @@
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import http from "node:http";
+// mint a livello unit, con lo STESSO SESSION_SECRET passato al server: serve
+// alla sezione 8b per fabbricare un token già scaduto (il gancio test-mint
+// del server conia solo token freschi).
+import { mintClaimToken } from "../src/claim.js";
 import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -369,6 +373,99 @@ try {
   });
   check("push parallelo al primo → 429 (il throttle regge anche in volo)", () =>
     assert.equal([mA, mB].filter((r) => r.status === 429).length, 1));
+
+  // --- 8b. Claim-link onboarding (Zalo-first → account) ---------------------
+  // Il webhook Zalo gira senza firma in test (OA non configurato): si simula
+  // l'utente solo-Zalo con "thu 2tr4" → nasce il libro zalo:<id> con una voce
+  // (e la CTA con il PRIMO token, che non possiamo leggere: sendText è spenta).
+  // I token per le prove arrivano dal gancio test-mint — stessa via, stesso
+  // registro del webhook, quindi ogni mint invalida il precedente.
+  const ZUID = "ze2e" + String(Date.now()).slice(-6);
+  await api("/webhooks/zalo", { method: "POST", body: JSON.stringify({
+    event_name: "user_send_text", sender: { id: ZUID },
+    message: { text: "thu 2tr4", msg_id: "m-claim-1" }, timestamp: Date.now() }) });
+  await new Promise((r) => setTimeout(r, 600));   // l'ACK precede l'elaborazione
+
+  const savedTok8b = token; token = null;
+  const t1 = (await api(`/api/claim/test-mint/${ZUID}`)).body.token;
+  const t2 = (await api(`/api/claim/test-mint/${ZUID}`)).body.token;
+  check("test-mint conia token in forma base64url.base64url", () =>
+    assert.match(t2, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/));
+
+  // la pagina si serve SEMPRE — token valido, superato o spazzatura
+  const page = await api(`/claim/${t2}`);
+  check("GET /claim/<token> serve la pagina (200 + titolo della spec)", () => {
+    assert.equal(page.status, 200);
+    assert.match(String(page.body), /Kết nối sổ Zalo/);
+  });
+  const pageJunk = await api("/claim/spazzatura-qualunque");
+  check("GET /claim/<spazzatura> serve comunque la pagina (validazione sull'API)", () =>
+    assert.equal(pageJunk.status, 200));
+
+  const prev = await api(`/api/claim/preview/${t2}`);
+  check("preview: SOLO il conteggio, mai le voci", () => {
+    assert.equal(prev.status, 200);
+    assert.deepEqual(prev.body, { ok: true, entries: 1 });
+    assert.ok(!JSON.stringify(prev.body).includes("2400000"), "nessun importo nel payload");
+  });
+
+  // re-mint: t2 ha invalidato t1
+  const claimPhone = "0902" + String(Date.now()).slice(-6);
+  const oldTok = await api("/api/claim", { method: "POST",
+    body: JSON.stringify({ token: t1, phone: claimPhone, pin: "246813" }) });
+  check("token superato dal re-mint → 4xx, nessun account creato", () => {
+    assert.ok(oldTok.status >= 400, "status " + oldTok.status);
+    assert.equal(oldTok.body.code, "invalid");
+  });
+
+  // manomissione: un carattere della firma
+  const tam = t2.slice(0, -1) + (t2.endsWith("A") ? "B" : "A");
+  const tampered = await api("/api/claim", { method: "POST",
+    body: JSON.stringify({ token: tam, phone: claimPhone, pin: "246813" }) });
+  check("token manomesso → 4xx invalid", () => {
+    assert.ok(tampered.status >= 400);
+    assert.equal(tampered.body.code, "invalid");
+  });
+
+  // percorso felice: registrazione + merge del libro zalo nell'account
+  const claimed = await api("/api/claim", { method: "POST", body: JSON.stringify({
+    token: t2, phone: claimPhone, pin: "246813", name: "Quán Claim E2E" }) });
+  check("claim felice: account nuovo + libro Zalo fuso", () => {
+    assert.equal(claimed.status, 200);
+    assert.equal(claimed.body.ok, true);
+    assert.ok(claimed.body.token, "torna un bearer token di sessione");
+    assert.equal(claimed.body.account?.zaloLinked, true);
+    assert.equal(claimed.body.moved, 1, "la voce Zalo è migrata");
+  });
+  check("il claim non fa MAI trapelare PIN o hash", () =>
+    assert.ok(!JSON.stringify(claimed.body).match(/246813|pinHash|salt/i)));
+
+  token = claimed.body.token;
+  const claimedLed = await api("/api/ledger");
+  check("la voce scritta su Zalo è visibile col bearer del nuovo account", () => {
+    const hit = (claimedLed.body.entries || []).find((e) => e.amount === 2_400_000 && e.source === "zalo");
+    assert.ok(hit, "manca la voce thu 2tr4 migrata");
+  });
+  token = null;
+
+  // riuso del token appena consumato
+  const reuse = await api("/api/claim", { method: "POST",
+    body: JSON.stringify({ token: t2, phone: claimPhone, pin: "246813" }) });
+  check("token riusato → 4xx used", () => {
+    assert.ok(reuse.status >= 400);
+    assert.equal(reuse.body.code, "used");
+  });
+
+  // token scaduto: coniato a livello unit con lo stesso secret, 73 ore fa
+  const oldMint = mintClaimToken("zexp" + Date.now(), {
+    secret: "test-secret-e2e", now: Date.now() - 73 * 60 * 60 * 1000 });
+  const expired = await api("/api/claim", { method: "POST",
+    body: JSON.stringify({ token: oldMint, phone: "0903000111", pin: "246813" }) });
+  check("token scaduto (72h) → 4xx expired", () => {
+    assert.ok(expired.status >= 400);
+    assert.equal(expired.body.code, "expired");
+  });
+  token = savedTok8b;
 
   // --- 9. Il secret non esce MAI --------------------------------------------
   // Il setaccio finale: il secret viaggia SOLO nel corpo della POST di config

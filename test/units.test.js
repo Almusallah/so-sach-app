@@ -778,3 +778,164 @@ test("pendingStore: gli uid non si mescolano", () => {
   assert.equal(s.take("u1"), "mia");
   assert.equal(s.take("u2"), "sua");
 });
+
+// ---- Claim token: l'onboarding Zalo-first → account (ONBOARDING_SPEC) -------
+import {
+  mintClaimToken, verifyClaimToken, hashClaimToken,
+  makeMemoryClaimRegistry, claimCtaLine, claimReminderLine, claimPromptFor,
+} from "../src/claim.js";
+
+const SECRET = "claim-test-secret";
+const NOW = Date.parse("2026-08-21T00:00:00Z");
+const H72 = 72 * 60 * 60 * 1000;
+
+test("claim: mint → verify, roundtrip pulito", () => {
+  const tok = mintClaimToken("zalo-abc-123", { secret: SECRET, now: NOW });
+  assert.deepEqual(verifyClaimToken(tok, { secret: SECRET, now: NOW }), { zaloId: "zalo-abc-123" });
+  // forma: base64url(payload).base64url(hmac) — niente "+", "/", "=" (va in URL)
+  assert.match(tok, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+});
+
+test("claim: scade a 72 ore — al limite vale, oltre no", () => {
+  const tok = mintClaimToken("z1", { secret: SECRET, now: NOW });
+  assert.deepEqual(verifyClaimToken(tok, { secret: SECRET, now: NOW + H72 }), { zaloId: "z1" },
+    "esattamente alla scadenza è ancora valido (come il TTL del pendingStore)");
+  assert.deepEqual(verifyClaimToken(tok, { secret: SECRET, now: NOW + H72 + 1 }), { error: "expired" });
+});
+
+test("claim: un carattere cambiato = invalid, in QUALUNQUE punto del token", () => {
+  const tok = mintClaimToken("z1", { secret: SECRET, now: NOW });
+  const [payload, mac] = tok.split(".");
+  const flip = (s, i) => s.slice(0, i) + (s[i] === "A" ? "B" : "A") + s.slice(i + 1);
+  // un byte nel payload, un byte nella firma, firma di un altro segreto
+  assert.deepEqual(verifyClaimToken(flip(payload, 3) + "." + mac, { secret: SECRET, now: NOW }), { error: "invalid" });
+  assert.deepEqual(verifyClaimToken(payload + "." + flip(mac, 3), { secret: SECRET, now: NOW }), { error: "invalid" });
+  assert.deepEqual(verifyClaimToken(tok, { secret: "altro-segreto", now: NOW }), { error: "invalid" });
+});
+
+test("claim: spazzatura e forme monche → invalid, mai un'eccezione", () => {
+  for (const raw of ["", null, undefined, "abc", "a.b.c", ".", "x.", ".y", "not-a-token"]) {
+    assert.deepEqual(verifyClaimToken(raw, { secret: SECRET, now: NOW }), { error: "invalid" }, JSON.stringify(raw));
+  }
+});
+
+test("claim: monouso — consumato una volta, la seconda è 'used'", () => {
+  const reg = makeMemoryClaimRegistry();
+  const tok = mintClaimToken("z1", { secret: SECRET, now: NOW, registry: reg });
+  const v = verifyClaimToken(tok, { secret: SECRET, now: NOW, registry: reg });
+  assert.deepEqual(v, { zaloId: "z1" });
+  reg.markUsed("z1", hashClaimToken(tok));
+  assert.deepEqual(verifyClaimToken(tok, { secret: SECRET, now: NOW, registry: reg }), { error: "used" });
+});
+
+test("claim: UN token per uid — il re-mint invalida il precedente", () => {
+  const reg = makeMemoryClaimRegistry();
+  const t1 = mintClaimToken("z1", { secret: SECRET, now: NOW, registry: reg });
+  const t2 = mintClaimToken("z1", { secret: SECRET, now: NOW + 1000, registry: reg });
+  assert.deepEqual(verifyClaimToken(t1, { secret: SECRET, now: NOW + 2000, registry: reg }), { error: "invalid" },
+    "il token vecchio muore al re-mint");
+  assert.deepEqual(verifyClaimToken(t2, { secret: SECRET, now: NOW + 2000, registry: reg }), { zaloId: "z1" },
+    "quello nuovo vive");
+  // …e il re-mint di un ALTRO uid non tocca nessuno dei due
+  mintClaimToken("z2", { secret: SECRET, now: NOW, registry: reg });
+  assert.deepEqual(verifyClaimToken(t2, { secret: SECRET, now: NOW + 2000, registry: reg }), { zaloId: "z1" });
+});
+
+test("claim: la CTA esce UNA volta sola per libro (claimPromptedAt)", () => {
+  const book = { profile: {}, entries: [] };
+  const link = "https://sosach.com.vn/claim/tok123";
+  const first = claimPromptFor(book, link);
+  assert.ok(first.includes(link), "la prima volta porta il link");
+  assert.ok(first.includes("Tạo tài khoản"), "e la copy della spec");
+  assert.ok(book.claimPromptedAt, "il flag resta sul libro");
+  assert.equal(claimPromptFor(book, link), "", "la seconda volta: niente");
+  assert.equal(claimPromptFor(null, link), "", "senza libro: niente");
+});
+
+test("claim: copy VI-first con coppia EN, termini fiscali vietnamiti in EN", () => {
+  const link = "https://sosach.com.vn/claim/x";
+  assert.match(claimCtaLine(link), /Tạo tài khoản \(miễn phí\)/);
+  assert.ok(claimCtaLine(link).includes(link));
+  assert.match(claimCtaLine(link, "en"), /free account/);
+  assert.match(claimCtaLine(link, "en"), /đại lý thuế/, "il termine fiscale resta vietnamita");
+  // il reminder è UNA riga, in entrambe le lingue
+  for (const lang of ["vi", "en"]) {
+    const line = claimReminderLine(link, lang);
+    assert.ok(!line.includes("\n"), "riga breve, senza a-capo: " + lang);
+    assert.ok(line.includes(link), lang);
+  }
+  assert.match(claimReminderLine(link), /không mất sổ khi đổi điện thoại/);
+});
+
+// ---- Nudge CTV meinvoice (e-invoice) ----------------------------------------
+// La riga referral esce SOLO sopra la soglia e-invoice E con MEINVOICE_REF_CODE
+// impostata; senza codice l'output resta identico (default di produzione).
+// La norma citata è il Nghị định 254/2026/NĐ-CP — il Decreto 70/2025 che lo
+// precedeva è abrogato e NON deve comparire nel messaggio.
+import { einvoiceNudge } from "../src/zalo.js";
+
+const NUDGE_ABOVE = 1_200_000_000;   // sopra la soglia 1 tỷ
+const NUDGE_BELOW = 400_000_000;     // sotto la soglia
+
+test("einvoiceNudge: sotto soglia → stringa vuota, anche col codice", () => {
+  assert.equal(einvoiceNudge(NUDGE_BELOW, "vi", "CTV123"), "");
+  assert.equal(einvoiceNudge(NUDGE_BELOW, "en", "CTV123"), "");
+  assert.equal(einvoiceNudge(NUDGE_BELOW, "vi", ""), "");
+});
+
+test("einvoiceNudge: sopra soglia SENZA codice → stringa vuota (default prod)", () => {
+  assert.equal(einvoiceNudge(NUDGE_ABOVE, "vi", ""), "");
+  assert.equal(einvoiceNudge(NUDGE_ABOVE, "en", ""), "");
+  assert.equal(einvoiceNudge(NUDGE_ABOVE, "vi", undefined), "");
+});
+
+test("einvoiceNudge: sopra soglia col codice → UNA riga, VI e EN, cita NĐ 254/2026", () => {
+  for (const lang of ["vi", "en"]) {
+    const line = einvoiceNudge(NUDGE_ABOVE, lang, "CTV123");
+    assert.ok(line.startsWith("🧾"), lang);
+    assert.ok(!line.includes("\n"), "una riga sola: " + lang);
+    assert.ok(line.includes("meinvoice.vn"), lang);
+    assert.ok(line.includes("CTV123"), "il codice referral: " + lang);
+    assert.match(line, /254\/2026/, "cita la norma vigente: " + lang);
+    assert.ok(!line.includes("70/2025"), "il decreto abrogato non si cita da solo: " + lang);
+  }
+  assert.match(einvoiceNudge(NUDGE_ABOVE, "vi", "CTV123"), /mã giới thiệu CTV123/);
+  assert.match(einvoiceNudge(NUDGE_ABOVE, "en", "CTV123"), /referral code CTV123/);
+});
+
+test('nudge cablato in "quý" e "sổ": appare solo con MEINVOICE_REF_CODE', () => {
+  // Libro sopra soglia: ~1,2 tỷ proiettati (stesso setup del test "quý" sopra).
+  const book = { profile: { name: "Quán Cô Ba", category: "services_goods" }, entries: [] };
+  for (let d = 0; d < 40; d++) {
+    book.entries.push({ id: "n" + d, type: "thu", amount: 30_000_000,
+      date: `2026-07-${String((d % 30) + 1).padStart(2, "0")}`, provenance: "photo" });
+  }
+  const now = new Date("2026-08-19T00:00:00Z");
+  const yearD = (proj) => ({ year: 2026, revenue: 800_000_000, expenses: 0,
+    net: 800_000_000, projection: proj, crossed: proj >= 1_000_000_000, left: 0 });
+
+  const saved = process.env.MEINVOICE_REF_CODE;
+  try {
+    delete process.env.MEINVOICE_REF_CODE;
+    // Senza env: nessuna traccia del partner, in nessuna lingua.
+    for (const lang of ["vi", "en"]) {
+      assert.ok(!formatQuarterMessage(buildDeclaration(book, { now }), lang).includes("meinvoice"), lang);
+      assert.ok(!formatYearMessage(yearD(NUDGE_ABOVE), lang).includes("meinvoice"), lang);
+    }
+
+    process.env.MEINVOICE_REF_CODE = "CTV123";
+    for (const lang of ["vi", "en"]) {
+      const q = formatQuarterMessage(buildDeclaration(book, { now }), lang);
+      const y = formatYearMessage(yearD(NUDGE_ABOVE), lang);
+      assert.ok(q.includes("meinvoice.vn") && q.includes("CTV123"), "quý: " + lang);
+      assert.ok(y.includes("meinvoice.vn") && y.includes("CTV123"), "sổ: " + lang);
+      assert.match(q, /254\/2026/, "quý cita la norma vigente: " + lang);
+      assert.match(y, /254\/2026/, "sổ cita la norma vigente: " + lang);
+    }
+    // Sopra env ma SOTTO soglia: ancora niente.
+    assert.ok(!formatYearMessage(yearD(NUDGE_BELOW), "vi").includes("meinvoice"));
+  } finally {
+    if (saved === undefined) delete process.env.MEINVOICE_REF_CODE;
+    else process.env.MEINVOICE_REF_CODE = saved;
+  }
+});

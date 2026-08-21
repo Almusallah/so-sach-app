@@ -5,6 +5,7 @@
 //  billing payOS (env-gated, pilot mode senza chiavi), export CSV, Zalo OA.
 // ============================================================================
 import express from "express";
+import crypto from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
@@ -28,6 +29,7 @@ import { applyOpening, openingOf, declaredRevenue, latestCorrectable } from "./s
 import { sampleEntries, SAMPLE_PROFILE } from "./src/sample.js";
 import { demoAgency } from "./src/demo_agency.js";
 import { validateSheetsUrl, buildSheetsPayload, makePushQueue, pushToSheet } from "./src/sheets.js";
+import { mintClaimToken, verifyClaimToken, claimPromptFor, claimReminderLine } from "./src/claim.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -146,6 +148,68 @@ const sheetsQueue = makePushQueue(async (uid) => {
     await sheetsPushNow(uid, { retries: 2 });
   } catch (e) { console.error("sheets auto-push:", e.message); }
 }, { delayMs: SHEETS_DEBOUNCE_MS });
+
+// ---- Claim-link: onboarding Zalo-first → account (docs/ONBOARDING_SPEC.md) --------
+// L'utente solo-Zalo riceve, DOPO la prima voce registrata, un link firmato a
+// un tocco che porta il suo libro dentro un account web — mai un codice da
+// copiare. Stesso segreto delle sessioni: il token claim è a tutti gli effetti
+// una credenziale a scadenza (72h) per il SOLO libro zalo:<id>.
+const CLAIM_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+const PUBLIC_ORIGIN = (process.env.PUBLIC_ORIGIN || "https://sosach.com.vn").replace(/\/+$/, "");
+
+// Registro monouso del claim. La verità PERSISTITA vive sul libro zalo
+// (claimTokenHash / claimTokenUsedAt: sopravvivono al riavvio); la mappa in
+// memoria copre solo l'uid che un libro non ce l'ha ancora (reminder da
+// "menu" prima della prima voce). Un account già collegato vale "usato" anche
+// quando il merge ha rimosso il libro zalo: è il backstop contro il riuso.
+const claimHashMem = new Map();
+const claimRegistry = {
+  getCurrentHash: (zaloId) => books["zalo:" + zaloId]?.claimTokenHash || claimHashMem.get(zaloId) || null,
+  setCurrentHash: (zaloId, hash) => {
+    claimHashMem.set(zaloId, hash);
+    const b = books["zalo:" + zaloId];
+    if (b) { b.claimTokenHash = hash; persistBook("zalo:" + zaloId); }
+  },
+  isUsed: (zaloId) => !!findAccountByZaloId(zaloId) || !!books["zalo:" + zaloId]?.claimTokenUsedAt,
+  markUsed: (zaloId) => {
+    const b = books["zalo:" + zaloId];
+    if (b) { b.claimTokenUsedAt = new Date().toISOString(); persistBook("zalo:" + zaloId); }
+  },
+};
+
+// Ogni link coniato registra il proprio hash: UN token per uid alla volta,
+// rigenerare invalida il precedente (spec, Guardie).
+const claimLinkFor = (zaloId) =>
+  PUBLIC_ORIGIN + "/claim/" + mintClaimToken(zaloId, { secret: CLAIM_SECRET, registry: claimRegistry });
+
+// CTA una-tantum in coda alla PRIMA conferma di scrittura di un uid NON
+// collegato (flag claimPromptedAt sul libro — la decisione vive in
+// claimPromptFor, testabile da sola). Il mint avviene solo se la CTA esce.
+function claimCtaFor(zaloId, bookUid, lang) {
+  if (bookUid !== "zalo:" + zaloId) return "";   // collegato: il libro è "u:<phone>"
+  const b = books[bookUid];
+  if (!b || b.claimPromptedAt) return "";
+  const cta = claimPromptFor(b, claimLinkFor(zaloId), lang);
+  if (cta) persistBook(bookUid);                 // il flag deve sopravvivere al riavvio
+  return cta;
+}
+
+// Re-prompt breve: SOLO in coda al menu e a "quý" (spec, Flusso §2 — mai su
+// ogni risposta), e solo per uid non collegati.
+function claimReminderFor(zaloId, lang) {
+  if (findAccountByZaloId(zaloId)) return "";
+  return "\n\n" + claimReminderLine(claimLinkFor(zaloId), lang);
+}
+
+// Le risposte d'errore del claim, in vietnamita garbato + fallback sul flusso
+// codice esistente (che RESTA, per chi parte dal web). `code` è per la pagina:
+// la copia bilingue vive in claim.html, il testo qui è la rete di sicurezza.
+const CLAIM_ERROR_VI = {
+  expired: 'Đường dẫn đã hết hạn (72 giờ). Bạn gõ "menu" trong Zalo Sổ Sạch để nhận đường dẫn mới nhé.',
+  used: "Đường dẫn này đã được dùng rồi — sổ của bạn đã kết nối. Bạn chỉ cần đăng nhập trên web là thấy sổ.",
+  invalid: 'Đường dẫn không hợp lệ hoặc đã được thay bằng đường dẫn mới hơn. Bạn gõ "menu" trong Zalo Sổ Sạch để nhận đường dẫn mới nhé.',
+};
+const CLAIM_ERROR_STATUS = { expired: 410, used: 409, invalid: 400 };
 
 // ---- Zalo webhook (raw body PRIMA del json parser, per la firma) ---------------
 // Deduplica gli eventi Zalo. "Webhook Retry" è ATTIVO lato Zalo: se non
@@ -266,7 +330,8 @@ async function handleZaloEvent(event) {
         b.entries.push(entry);
         persistBook(bookUid);
         sheetsQueue.touch(bookUid);   // vista Sheets: push dopo la quiete
-        await sendText(uid, formatEntryMessage(entry, lang));
+        // Prima voce di un uid non collegato → CTA claim UNA volta (spec).
+        await sendText(uid, formatEntryMessage(entry, lang) + claimCtaFor(uid, bookUid, lang));
       }
     } else if (event.event_name === "user_send_text") {
       const rawText = (event?.message?.text || "").trim();
@@ -285,7 +350,8 @@ async function handleZaloEvent(event) {
           b.entries.push(pendingEntry);   // provenance "photo" già sulla voce
           persistBook(bookUid);
           sheetsQueue.touch(bookUid);     // vista Sheets: push dopo la quiete
-          await sendText(uid, formatEntryMessage(pendingEntry, lang));
+          // Anche il "1" di conferma è una scrittura: la CTA claim vale qui.
+          await sendText(uid, formatEntryMessage(pendingEntry, lang) + claimCtaFor(uid, bookUid, lang));
           return;
         }
         if (choice === "2" || choice === "3") {
@@ -454,9 +520,11 @@ async function handleZaloEvent(event) {
         // deposita per TRIMESTRE, e finora sul canale dove vive il cliente
         // questa era l'unica cosa che non si poteva chiedere.
         const b = getBook(bookUid);
-        await sendText(uid, formatQuarterMessage(buildDeclaration(b), lang));
+        // In coda a "quý": re-prompt claim di UNA riga per gli uid non
+        // collegati (spec, Flusso §2 — gli unici due posti sono menu e quý).
+        await sendText(uid, formatQuarterMessage(buildDeclaration(b), lang) + claimReminderFor(uid, lang));
       } else if (cmd === "menu") {
-        await sendText(uid, menuText({ linked: !!findAccountByZaloId(uid), lang }));
+        await sendText(uid, menuText({ linked: !!findAccountByZaloId(uid), lang }) + claimReminderFor(uid, lang));
       } else if (money) {
         // Il totale di fine giornata scritto a mano: la via principale per il
         // FATTURATO di un quán, dove le foto funzionano solo per le spese.
@@ -488,10 +556,14 @@ async function handleZaloEvent(event) {
           b.entries.push(entry);
           persistBook(bookUid);
           sheetsQueue.touch(bookUid);   // vista Sheets: push dopo la quiete
-          await sendText(uid, formatEntryMessage(entry, lang));
+          // Scrittura a mano = stesso momento magico della foto: CTA claim.
+          await sendText(uid, formatEntryMessage(entry, lang) + claimCtaFor(uid, bookUid, lang));
         }
       } else {
-        await sendText(uid, menuText({ linked: !!findAccountByZaloId(uid), lang }));
+        // Il testo sconosciuto riceve il menu: è output di menuText, quindi
+        // porta lo stesso re-prompt del comando "menu" (stessa riga, stessa
+        // condizione — mai una variante in più da tenere allineata).
+        await sendText(uid, menuText({ linked: !!findAccountByZaloId(uid), lang }) + claimReminderFor(uid, lang));
       }
     }
   } catch (e) { console.error("zalo webhook:", e.message); }
@@ -648,6 +720,56 @@ app.post("/api/link-agent", requireAuth, (req, res) => {
   persistAccount(req.phone);
   res.json({ ok: true, agent: { name: agent.name, phone: agent.phone } });
 });
+
+// ---- Claim-link: rotte (pagina + API) ---------------------------------------------
+// La pagina si serve SEMPRE, token valido o no: la validazione avviene sulla
+// API chiamata dalla pagina — così il token non finisce nei log del server e
+// lo status HTTP della pagina non fa da oracolo sulla validità del link.
+app.get("/claim/:token", rateLimit({ windowMs: 15 * 60_000, max: 30, name: "claim" }), (_req, res) =>
+  res.sendFile(join(__dirname, "public", "claim.html")));
+
+// Anteprima: SOLO il conteggio, MAI le voci — il token viaggia in un URL e un
+// link inoltrato per sbaglio non deve mostrare il libro a nessuno.
+app.get("/api/claim/preview/:token", rateLimit({ windowMs: 15 * 60_000, max: 30, name: "claim" }), (req, res) => {
+  const v = verifyClaimToken(req.params.token, { secret: CLAIM_SECRET, registry: claimRegistry });
+  if (v.error) return res.status(CLAIM_ERROR_STATUS[v.error]).json({ error: CLAIM_ERROR_VI[v.error], code: v.error });
+  res.json({ ok: true, entries: books["zalo:" + v.zaloId]?.entries?.length || 0 });
+});
+
+// Il claim vero: token valido + SĐT/PIN → account (login se esiste, il PIN si
+// valida e mai si sovrascrive; registrazione hộ altrimenti) → zaloId collegato
+// → mergeZaloBook (la macchina esistente: migra anche la config Sheets e
+// tocca la coda di push) → il token si consuma. Stesso secchio rate "claim".
+app.post("/api/claim", rateLimit({ windowMs: 15 * 60_000, max: 30, name: "claim" }), (req, res) => {
+  const { token: claimToken, phone: rawPhone, pin, name } = req.body || {};
+  const v = verifyClaimToken(claimToken, { secret: CLAIM_SECRET, registry: claimRegistry });
+  if (v.error) return res.status(CLAIM_ERROR_STATUS[v.error]).json({ error: CLAIM_ERROR_VI[v.error], code: v.error });
+  const phone = normalizePhone(rawPhone);
+  if (!phone) return res.status(400).json({ error: "Số điện thoại không hợp lệ (VD: 0901234567)." });
+  const out = accounts[phone] ? login({ phone, pin }) : register({ phone, pin, name, role: "ho" });
+  if (out.error) return res.status(400).json({ error: out.error });
+  const acct = out.account;
+  // il libro nasce col nome dell'account, come in /api/auth/register
+  const b = getBook("u:" + phone);
+  if (!b.profile.name && acct.name) { b.profile.name = acct.name; persistBook("u:" + phone); }
+  acct.zaloId = v.zaloId;
+  persistAccount(phone);
+  // Monouso: marcato PRIMA del merge (il merge rimuove il libro zalo, e il
+  // marcatore deve arrivare su disco finché il libro esiste). Dopo il merge
+  // il backstop è l'account collegato (claimRegistry.isUsed).
+  claimRegistry.markUsed(v.zaloId);
+  const moved = mergeZaloBook(v.zaloId, phone);
+  res.json({ ok: true, token: out.token, account: publicAccount(acct), moved });
+});
+
+// Gancio SOLO test (NODE_ENV=test): l'e2e non può leggere il messaggio Zalo
+// col link vero (sendText è spenta senza token OA), quindi conia da qui —
+// stessa via del webhook, stesso registro (il re-mint invalida il precedente
+// anche quando a coniare è il test). In produzione la rotta non esiste.
+if (process.env.NODE_ENV === "test") {
+  app.get("/api/claim/test-mint/:zaloId", (req, res) =>
+    res.json({ ok: true, token: mintClaimToken(req.params.zaloId, { secret: CLAIM_SECRET, registry: claimRegistry }) }));
+}
 
 // ---- Billing -------------------------------------------------------------------
 app.post("/api/billing/subscribe", requireAuth, async (req, res) => {

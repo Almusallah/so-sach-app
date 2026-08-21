@@ -64,12 +64,16 @@
   <section class="hero">
     <div class="hero-inner">
       <div class="hero-copy">
-        <div class="eyebrow" data-i18n="hero_eyebrow">Từ 01/01/2026 hết thuế khoán — 5,2 triệu hộ kinh doanh phải ghi sổ</div>
-        <h1 data-i18n="hero_h1">Chụp hoá đơn.<br/>Sổ sách tự lo.</h1>
+        <!-- Chip decreto (posizione: come il chip di conformità di meInvoice).
+             Cita SOLO il decreto corrente: NĐ 254/2026/NĐ-CP, in vigore dal
+             01/07/2026 — che abroga il 123/2020 e il 70/2025. -->
+        <div class="decree-chip" data-i18n="decree_chip">✓ Sẵn sàng đáp ứng NĐ 254/2026/NĐ-CP về hoá đơn điện tử</div>
+        <h1 data-i18n="hero_h1">Chụp hoá đơn.<br/><span class="hero-grad">Sổ sách tự lo.</span></h1>
         <p data-i18n="hero_p">Gửi ảnh hoá đơn vào Zalo, <b>Sổ Sạch</b> tự ghi sổ thu chi, canh ngưỡng thuế giúp bạn và soạn sẵn tờ khai quý — bằng tiếng Việt dễ hiểu, không cần biết kế toán.</p>
-        <div class="hero-cta">
-          <a href="#app" class="btn solid big" data-i18n="hero_cta1">Dùng thử ngay — miễn phí</a>
-          <a href="#how" class="btn outline big" data-i18n="hero_cta2">Xem cách hoạt động</a>
+        <!-- La coppia CTA unica: identica qui e dopo #how / #ways / prima del footer. -->
+        <div class="cta-row">
+          <a href="#app" class="cta-primary" data-i18n="cta_try">Dùng thử ngay — miễn phí</a>
+          <a href="#zalo" class="cta-secondary" data-i18n="cta_join">Đăng ký 100 hộ đầu tiên →</a>
         </div>
         <div class="hero-trust">
           <span data-i18n="trust1">📱 Chạy trong Zalo</span>
@@ -100,7 +104,7 @@
   </section>
 
   <main>
-    <section id="how">
+    <section id="how" class="plate plate-bianca">
       <div class="section-head">
         <div class="kicker" data-i18n="how_kicker">Cách hoạt động</div>
         <h2 data-i18n="how_h2">Ba bước, không cần biết kế toán</h2>
@@ -110,6 +114,10 @@
         <div class="how-card"><div class="n">2</div><h3 data-i18n="how2_t">AI ghi sổ</h3><p data-i18n="how2_p">Sổ Sạch đọc ảnh, tự phân loại thu/chi, ghi vào sổ. Sai thì sửa một chạm. Cuối tháng có tổng kết rõ ràng.</p></div>
         <div class="how-card"><div class="n">3</div><h3 data-i18n="how3_t">Tờ khai soạn sẵn</h3><p data-i18n="how3_p">Đến kỳ, tờ khai 01/CNKD đã điền sẵn số liệu. Ký, nộp — hoặc gửi thẳng cho đại lý thuế của bạn.</p></div>
       </div>
+      <div class="cta-row center">
+        <a href="#app" class="cta-primary" data-i18n="cta_try">Dùng thử ngay — miễn phí</a>
+        <a href="#zalo" class="cta-secondary" data-i18n="cta_join">Đăng ký 100 hộ đầu tiên →</a>
+      </div>
     </section>
 
     <!-- ======== BA CÁCH GHI DOANH THU ========
@@ -117,7 +125,7 @@
          SPESE (un quán compra 10 volte al mese) ma non per il FATTURATO
          (200 caffè al giorno). Qui si dice apertamente come entra l'incasso,
          perché è la prima domanda di ogni cô bán hàng. -->
-    <section id="ways">
+    <section id="ways" class="plate plate-wash">
       <div class="section-head">
         <div class="kicker" data-i18n="w_kicker">Doanh thu vào sổ</div>
         <h2 data-i18n="w_h2">Không ai chụp 200 ly cà phê</h2>
@@ -160,10 +168,36 @@
       </div>
 
       <p class="ways-note" data-i18n="w_note">💵 Bán bằng tiền mặt thì chưa có cách nào tự động — bạn gõ tổng tiền mặt cuối ngày. Sổ Sạch ghi rõ khoản nào ngân hàng xác nhận, khoản nào bạn tự khai, không trộn lẫn.</p>
+      <div class="cta-row center">
+        <a href="#app" class="cta-primary" data-i18n="cta_try">Dùng thử ngay — miễn phí</a>
+        <a href="#zalo" class="cta-secondary" data-i18n="cta_join">Đăng ký 100 hộ đầu tiên →</a>
+      </div>
+    </section>
+
+    <!-- ======== PROVA (ordine meInvoice, numeri nostri) ========
+         Contatore lista d'attesa → screenshot VERO del prodotto in cornice-
+         dispositivo con chip d'annotazione → riga di conformità. Le chip
+         citano numeri che stanno davvero nello screenshot (98/A, soglia 1 tỷ,
+         scadenza 31/10). Niente FAQ: non ne esiste una. -->
+    <section id="proof" class="plate plate-bianca">
+      <div class="section-head">
+        <div class="kicker" data-i18n="pf_kicker">Sổ thật, số thật</div>
+        <h2 data-i18n="pf_h2">Đây là sổ của một quán bún bò</h2>
+        <p data-i18n="pf_p">Không ảnh dựng, không số vẽ — màn hình thật của bản dùng thử, tính bằng chính công cụ thuế của sản phẩm.</p>
+      </div>
+      <div class="proof-count" id="proofCount"></div>
+      <div class="shot-frame">
+        <img src="/shot-book.jpg" width="840" height="1159" loading="lazy"
+             alt="Màn hình Sổ Sạch: Điểm Sổ Sạch 98/A, ngưỡng thuế 1 tỷ, dòng tiền 12 tháng" />
+        <span class="shot-chip pos-a" data-i18n="pf_chip1">💎 Điểm Sổ Sạch 98/A</span>
+        <span class="shot-chip pos-b" data-i18n="pf_chip2">Còn cách ngưỡng 1 tỷ ✓</span>
+        <span class="shot-chip warn" data-i18n="pf_chip3">⏰ Hạn nộp tờ khai: 31/10/2026</span>
+      </div>
+      <p class="proof-legal" data-i18n="pf_legal">Mọi tờ khai Sổ Sạch tạo ra đều là <b>BẢN NHÁP</b> — số liệu thuế là ước tính, hãy kiểm tra với đại lý thuế của bạn trước khi nộp.</p>
     </section>
 
     <!-- ======== APP ======== -->
-    <section id="app">
+    <section id="app" class="plate plate-wash">
       <div class="section-head">
         <div class="kicker" data-i18n="app_kicker">Sổ của tôi · bản dùng thử</div>
         <h2 data-i18n="app_h2">Thử ngay trên web</h2>
@@ -229,7 +263,7 @@
     </section>
 
     <!-- ======== KÊNH PHÂN PHỐI: ĐẠI LÝ THUẾ (bản trình diễn công khai) ======== -->
-    <section id="agencyDemo">
+    <section id="agencyDemo" class="plate plate-bianca">
       <div class="section-head">
         <div class="kicker" data-i18n="ag_kicker">Kênh phân phối</div>
         <h2 data-i18n="ag_h2">Một đại lý thuế, cả trăm hộ kinh doanh</h2>
@@ -238,14 +272,22 @@
       <div class="panel"><div id="agencyBox" class="agency"></div></div>
     </section>
 
-    <section class="zalo-banner">
+    <section class="zalo-banner" id="zalo">
       <div>
         <div class="kicker" style="color:var(--zalo)" data-i18n="zb_kicker">Trên Zalo</div>
         <h2 data-i18n="zb_h2">Sổ Sạch sống trong Zalo của bạn</h2>
         <p data-i18n="zb_p">Không app mới, không mật khẩu mới. Kết bạn với OA Sổ Sạch, gửi ảnh hoá đơn là xong. Bản OA đang mở cho 100 hộ đầu tiên tại TP.HCM.</p>
         <div class="wl-count" id="wlCount"></div>
       </div>
-      <button class="btn solid big" style="background:var(--zalo)" id="waitlistBtn" data-i18n="zb_btn">Đăng ký 100 hộ đầu tiên</button>
+      <!-- Il bottone della lista d'attesa segue il gradiente CTA di casa:
+           niente varianti ad-hoc (l'override blu inline è morto qui). -->
+      <button class="btn solid big" id="waitlistBtn" data-i18n="zb_btn">Đăng ký 100 hộ đầu tiên</button>
+    </section>
+
+    <!-- Ultima timbrata della coppia CTA, prima del footer. -->
+    <section class="cta-row center" aria-label="CTA">
+      <a href="#app" class="cta-primary" data-i18n="cta_try">Dùng thử ngay — miễn phí</a>
+      <a href="#zalo" class="cta-secondary" data-i18n="cta_join">Đăng ký 100 hộ đầu tiên →</a>
     </section>
   </main>
 

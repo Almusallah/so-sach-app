@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Pagina con token nell'URL: mai indicizzare, mai passare il referrer. -->
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="referrer" content="no-referrer" />
+  <title>Kết nối sổ Zalo — Sổ Sạch</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    /* Regola di casa: SOLO token di :root (styles.css) — nessun esadecimale. */
+    .claim-main { max-width: 520px; margin: 0 auto; padding: 30px 20px 60px; }
+    .claim-panel h1 { font-size: 24px; color: var(--giada-ink); margin: 0 0 6px; line-height: 1.25; }
+    .claim-sub { margin: 0 0 16px; color: var(--grigio); font-size: 14.5px; line-height: 1.6; }
+    .claim-count { display: flex; align-items: center; gap: 10px; background: var(--giada-wash); border: 1px solid var(--bordo); border-radius: 12px; padding: 11px 14px; font-size: 15px; color: var(--giada-ink); font-weight: 600; margin-bottom: 16px; }
+    .claim-count b { font-size: 18px; }
+    .claim-disc { font-size: 12px; color: var(--grigio); margin-top: 12px; line-height: 1.6; }
+    .claim-dead { background: var(--oro-wash); border: 1px solid var(--bordo); border-radius: 12px; padding: 13px 15px; font-size: 14px; color: var(--testo); line-height: 1.65; }
+    .claim-dead a { color: var(--giada); font-weight: 700; text-decoration: underline; }
+    .claim-foot { text-align: center; font-size: 12px; color: var(--grigio); margin-top: 22px; line-height: 1.6; }
+    .claim-foot a { color: var(--giada); font-weight: 600; }
+  </style>
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/" translate="no">📒 Sổ Sạch</a>
+      <nav class="nav-actions">
+        <button class="btn ghost" id="langBtn" type="button">EN</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="claim-main">
+    <div class="panel claim-panel">
+      <!-- Titolo dalla spec (Copy): "Kết nối sổ Zalo với tài khoản của bạn" -->
+      <h1 data-i18n="title">Kết nối sổ Zalo với tài khoản của bạn</h1>
+      <p class="claim-sub" data-i18n="sub">Sổ bạn đã ghi trên Zalo sẽ gộp vào tài khoản web — xem mọi lúc, cho đại lý thuế xem giúp, và không mất sổ khi đổi điện thoại.</p>
+
+      <!-- Anteprima: SOLO il conteggio (mai le voci — il token viaggia in URL) -->
+      <div class="claim-count hidden" id="countBox">📒 <span id="countLine"></span></div>
+      <div class="conf-note" id="loadingBox">⏳ …</div>
+
+      <!-- Token scaduto/usato/invalido: messaggio garbato + fallback sul
+           flusso codice esistente (che resta, per chi parte dal web). -->
+      <div class="claim-dead hidden" id="deadBox">
+        <div id="deadMsg"></div>
+        <div style="margin-top:9px" data-i18n="fallback">Cách khác: vào <a href="/">sosach.com.vn</a> → đăng nhập / tạo tài khoản → Tài khoản → “Lấy mã kết nối Zalo”, rồi gửi mã 6 ký tự vào khung chat Zalo Sổ Sạch.</div>
+      </div>
+
+      <form id="claimForm" class="hidden" autocomplete="on">
+        <div class="field">
+          <label for="cPhone" data-i18n="phone">Số điện thoại</label>
+          <input id="cPhone" inputmode="numeric" autocomplete="tel" placeholder="090 123 4567" required />
+        </div>
+        <div class="field">
+          <label for="cPin" data-i18n="pin">Mã PIN (4–8 số)</label>
+          <input id="cPin" type="password" inputmode="numeric" autocomplete="off" placeholder="••••" required />
+        </div>
+        <div class="field">
+          <label for="cName" data-i18n="name">Tên hộ kinh doanh (không bắt buộc)</label>
+          <input id="cName" autocomplete="organization" />
+        </div>
+        <div class="err" id="cErr" aria-live="polite"></div>
+        <button class="btn solid block" id="cGo" type="submit" data-i18n="go">Kết nối sổ</button>
+        <div class="claim-disc" data-i18n="hint">Đã có tài khoản Sổ Sạch? Nhập đúng SĐT + PIN của tài khoản đó là sổ Zalo gộp vào. Chưa có? Sổ Sạch tạo tài khoản mới cho bạn — miễn phí.</div>
+      </form>
+    </div>
+    <div class="claim-foot"><a href="/" translate="no">Sổ Sạch</a> · <span data-i18n="foot">Sổ sách cho hộ kinh doanh, ngay trong Zalo</span></div>
+  </main>
+
+  <script>
+    // =======================================================================
+    //  Pagina claim (docs/ONBOARDING_SPEC.md): il link firmato arriva dal bot
+    //  Zalo; qui SĐT + PIN → POST /api/claim → il libro Zalo si fonde
+    //  nell'account e si atterra su /#app già loggati.
+    //  Standalone per scelta: app.js appartiene alla home e non si tocca —
+    //  ma chiave del token (ss_token) e lingua (ss_lang) sono LE STESSE.
+    // =======================================================================
+    const $ = (s) => document.querySelector(s);
+    let LANG = localStorage.getItem("ss_lang") || "vi";
+
+    // VI-first, coppia EN — stessa forma del dizionario I18N di app.js.
+    const I18N = {
+      title: { vi: "Kết nối sổ Zalo với tài khoản của bạn", en: "Link your Zalo book to an account" },
+      sub: { vi: "Sổ bạn đã ghi trên Zalo sẽ gộp vào tài khoản web — xem mọi lúc, cho đại lý thuế xem giúp, và không mất sổ khi đổi điện thoại.", en: "The book you keep on Zalo merges into a web account — view it any time, let your đại lý thuế help, and never lose it when you change phones." },
+      count: { vi: "Sổ của bạn trên Zalo: {n} bút toán", en: "Your Zalo book: {n} entries" },
+      phone: { vi: "Số điện thoại", en: "Phone number" },
+      pin: { vi: "Mã PIN (4–8 số)", en: "PIN (4–8 digits)" },
+      name: { vi: "Tên hộ kinh doanh (không bắt buộc)", en: "Business name (optional)" },
+      go: { vi: "Kết nối sổ", en: "Link my book" },
+      hint: { vi: "Đã có tài khoản Sổ Sạch? Nhập đúng SĐT + PIN của tài khoản đó là sổ Zalo gộp vào. Chưa có? Sổ Sạch tạo tài khoản mới cho bạn — miễn phí.", en: "Already have a Sổ Sạch account? Enter that phone + PIN and your Zalo book merges into it. New here? Sổ Sạch creates the account for you — free." },
+      fallback: { vi: "Cách khác: vào <a href=\"/\">sosach.com.vn</a> → đăng nhập / tạo tài khoản → Tài khoản → “Lấy mã kết nối Zalo”, rồi gửi mã 6 ký tự vào khung chat Zalo Sổ Sạch.", en: "Another way: open <a href=\"/\">sosach.com.vn</a> → sign in / create an account → Tài khoản → “Get Zalo link code”, then send the 6-character code in the Sổ Sạch Zalo chat." },
+      foot: { vi: "Sổ sách cho hộ kinh doanh, ngay trong Zalo", en: "Bookkeeping for household businesses, right inside Zalo" },
+      err_expired: { vi: "Đường dẫn đã hết hạn (72 giờ). Bạn gõ \"menu\" trong Zalo Sổ Sạch để nhận đường dẫn mới nhé.", en: "This link has expired (72 hours). Type \"menu\" in the Sổ Sạch Zalo chat to get a fresh one." },
+      err_used: { vi: "Đường dẫn này đã được dùng rồi — sổ của bạn đã kết nối. Bạn chỉ cần đăng nhập trên web là thấy sổ.", en: "This link was already used — your book is linked. Just sign in on the web to see it." },
+      err_invalid: { vi: "Đường dẫn không hợp lệ hoặc đã được thay bằng đường dẫn mới hơn. Bạn gõ \"menu\" trong Zalo Sổ Sạch để nhận đường dẫn mới nhé.", en: "This link is not valid, or a newer one has replaced it. Type \"menu\" in the Sổ Sạch Zalo chat to get a fresh one." },
+      err_net: { vi: "Không kết nối được — bạn kiểm tra mạng rồi thử lại nhé.", en: "Couldn't reach the server — check your connection and try again." },
+      linking: { vi: "⏳ Đang kết nối…", en: "⏳ Linking…" },
+      done: { vi: "✅ Xong! Đang mở sổ của bạn…", en: "✅ Done! Opening your book…" },
+    };
+    const T = (k, vars) => {
+      let s = (I18N[k] || {})[LANG] || (I18N[k] || {}).vi || k;
+      if (vars) for (const [key, v] of Object.entries(vars)) s = s.replace("{" + key + "}", v);
+      return s;
+    };
+    function applyI18n() {
+      document.documentElement.lang = LANG;
+      document.querySelectorAll("[data-i18n]").forEach((el) => { if (I18N[el.dataset.i18n]) el.innerHTML = T(el.dataset.i18n); });
+      $("#langBtn").textContent = LANG === "vi" ? "EN" : "VI";
+    }
+    $("#langBtn").addEventListener("click", () => {
+      LANG = LANG === "vi" ? "en" : "vi";
+      localStorage.setItem("ss_lang", LANG);
+      applyI18n();
+      if (lastCount !== null) renderCount(lastCount);
+      if (lastErrCode) renderDead(lastErrCode, lastErrText);
+    });
+
+    // Il token è l'ultimo segmento del percorso: /claim/<token>.
+    const TOKEN = decodeURIComponent((location.pathname.split("/claim/")[1] || "").split("/")[0] || "");
+
+    let lastCount = null, lastErrCode = null, lastErrText = "";
+    function renderCount(n) {
+      lastCount = n;
+      $("#countLine").innerHTML = T("count", { n: "<b>" + n + "</b>" });
+      $("#countBox").classList.remove("hidden");
+    }
+    function renderDead(code, serverText) {
+      lastErrCode = code; lastErrText = serverText || "";
+      // textContent, mai innerHTML: il testo del server non deve poter
+      // iniettare markup nella pagina.
+      $("#deadMsg").textContent = I18N["err_" + code] ? T("err_" + code) : (serverText || T("err_invalid"));
+      $("#deadBox").classList.remove("hidden");
+      $("#claimForm").classList.add("hidden");
+      $("#countBox").classList.add("hidden");
+    }
+
+    // Anteprima: solo il conteggio. La validazione del token avviene QUI (la
+    // pagina si serve sempre): un link morto mostra il messaggio garbato e il
+    // fallback, mai un form che fallirebbe solo alla fine.
+    async function preview() {
+      // Senza token (es. /claim.html raggiunta dal file statico) la pagina
+      // non chiama NULLA: subito lo stato "link non valido" + fallback.
+      if (!TOKEN) {
+        $("#loadingBox").classList.add("hidden");
+        return renderDead("invalid");
+      }
+      try {
+        const r = await fetch("/api/claim/preview/" + encodeURIComponent(TOKEN));
+        const d = await r.json().catch(() => ({}));
+        $("#loadingBox").classList.add("hidden");
+        if (!r.ok || !d.ok) return renderDead(d.code || "invalid", d.error);
+        renderCount(d.entries);
+        $("#claimForm").classList.remove("hidden");
+        $("#cPhone").focus();
+      } catch {
+        $("#loadingBox").classList.add("hidden");
+        renderDead("net", T("err_net"));
+      }
+    }
+
+    $("#claimForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = $("#cGo");
+      btn.disabled = true; btn.textContent = T("linking");
+      $("#cErr").textContent = "";
+      try {
+        const r = await fetch("/api/claim", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: TOKEN, phone: $("#cPhone").value, pin: $("#cPin").value, name: $("#cName").value }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) {
+          // Token morto → stato "dead" con fallback; errore di SĐT/PIN →
+          // resta sul form, si corregge e si riprova.
+          if (d.code) { renderDead(d.code, d.error); }
+          else { $("#cErr").textContent = d.error || T("err_net"); }
+          btn.disabled = false; btn.textContent = T("go");
+          return;
+        }
+        // Stessa chiave di app.js (ss_token): su /#app si è già dentro.
+        localStorage.setItem("ss_token", d.token);
+        btn.textContent = T("done");
+        location.href = "/#app";
+      } catch {
+        $("#cErr").textContent = T("err_net");
+        btn.disabled = false; btn.textContent = T("go");
+      }
+    });
+
+    applyI18n();
+    preview();
+  </script>
+</body>
+</html>

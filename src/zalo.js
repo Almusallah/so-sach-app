@@ -14,6 +14,7 @@
 // ============================================================================
 import { createHash } from "node:crypto";
 import { getAccessToken, tokenStatus } from "./zalo_token.js";
+import { thresholdStatus } from "./tax.js";
 
 // Accetta il nome nuovo e, per compatibilità, quello vecchio.
 const OA_SECRET = process.env.ZALO_OA_SECRET_KEY || process.env.ZALO_APP_SECRET || null;
@@ -138,6 +139,31 @@ export const vnDate = (iso) => {
 
 const vnd = (n) => Number(n || 0).toLocaleString("vi-VN") + "đ";
 
+// Nudge CTV meinvoice — UNA riga in coda a "quý" e "sổ", e SOLO quando:
+//  1. la proiezione annua ha superato la soglia e-invoice (thresholdStatus);
+//  2. il codice referral esiste (env MEINVOICE_REF_CODE) — è il default di
+//     produzione che manca finché Yuri non si registra come CTV: senza codice
+//     l'output resta IDENTICO a prima, byte per byte.
+// Citazione fiscale: il Decreto 70/2025 (che introdusse l'obbligo) è ABROGATO —
+// la norma vigente è il Nghị định 254/2026/NĐ-CP, in vigore dal 01/07/2026,
+// ed è quella che il messaggio cita.
+export function einvoiceNudge(projection, lang = "vi", code = "") {
+  if (!code) return "";
+  if (!thresholdStatus(Number(projection) || 0).eInvoice.crossed) return "";
+  if (lang === "en") {
+    return `🧾 From 1 tỷ revenue you must issue e-invoices from a cash register (NĐ 254/2026). Sổ Sạch partner: meinvoice.vn — referral code ${code}.`;
+  }
+  return `🧾 Từ 1 tỷ doanh thu phải xuất hoá đơn điện tử từ máy tính tiền (NĐ 254/2026). Đối tác của Sổ Sạch: meinvoice.vn — mã giới thiệu ${code}.`;
+}
+
+// Cablaggio nei builder: legge l'env a ogni chiamata (non a import time, così
+// i test possono impostarla/rimuoverla) e, se la riga c'è, la separa con una
+// riga vuota. Se non c'è: stringa vuota, output invariato.
+const nudgeSuffix = (projection, lang) => {
+  const line = einvoiceNudge(projection, lang, process.env.MEINVOICE_REF_CODE || "");
+  return line ? `\n\n${line}` : "";
+};
+
 // Il trimestre in un messaggio: è la domanda che il prodotto esiste per
 // rispondere, perché la 01/CNKD si deposita per TRIMESTRE.
 // ⚠️ Nella variante inglese i TERMINI FISCALI restano vietnamiti (01/CNKD,
@@ -170,6 +196,8 @@ export function formatQuarterMessage(d, lang = "vi") {
     L.push(`🗓️ Hạn nộp tờ khai (filing deadline): ${vnDate(d.deadline)}`);
     L.push(``);
     L.push(`Draft — check with your đại lý thuế (tax agent) before filing.`);
+    const nudgeEn = einvoiceNudge(d.projection, "en", process.env.MEINVOICE_REF_CODE || "");
+    if (nudgeEn) L.push(``, nudgeEn);
     return L.join("\n");
   }
   const L = [
@@ -197,6 +225,8 @@ export function formatQuarterMessage(d, lang = "vi") {
   L.push(`🗓️ Hạn nộp tờ khai: ${vnDate(d.deadline)}`);
   L.push(``);
   L.push(`Bản nháp — kiểm tra với đại lý thuế trước khi nộp.`);
+  const nudge = einvoiceNudge(d.projection, "vi", process.env.MEINVOICE_REF_CODE || "");
+  if (nudge) L.push(``, nudge);
   return L.join("\n");
 }
 
@@ -215,7 +245,8 @@ export function formatYearMessage(d, lang = "vi") {
       (d.crossed
         ? `⚠️ Past the 1 tỷ threshold — tax is due this quarter. Type "quarter" for the numbers.`
         : `✅ ${vnd(d.left)} to go before the 1 tỷ threshold.`) +
-      `\n\nType "quarter" for this quarter and the hạn nộp tờ khai (filing deadline).`
+      `\n\nType "quarter" for this quarter and the hạn nộp tờ khai (filing deadline).` +
+      nudgeSuffix(d.projection, "en")
     );
   }
   return (
@@ -227,7 +258,8 @@ export function formatYearMessage(d, lang = "vi") {
     (d.crossed
       ? `⚠️ Đã vượt ngưỡng 1 tỷ — quý này phải nộp thuế. Gõ "quý" để xem số.`
       : `✅ Còn ${vnd(d.left)} nữa mới tới ngưỡng 1 tỷ.`) +
-    `\n\nGõ "quý" để xem quý này và hạn nộp tờ khai.`
+    `\n\nGõ "quý" để xem quý này và hạn nộp tờ khai.` +
+    nudgeSuffix(d.projection, "vi")
   );
 }
 

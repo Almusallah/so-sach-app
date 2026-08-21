@@ -31,11 +31,15 @@ let manualType = "thu";
 
 const I18N = {
   nav_app: { vi: "Sổ của tôi", en: "My ledger" },
-  hero_eyebrow: { vi: "Từ 01/01/2026 hết thuế khoán — 5,2 triệu hộ kinh doanh phải ghi sổ", en: "Lump-sum tax ends 01/01/2026 — 5.2M household businesses must keep books" },
-  hero_h1: { vi: "Chụp hoá đơn.<br/>Sổ sách tự lo.", en: "Snap the receipt.<br/>The books do themselves." },
+  // Chip decreto in hero: cita SOLO la legge corrente, NĐ 254/2026/NĐ-CP
+  // (in vigore dal 01/07/2026, abroga 123/2020 e 70/2025).
+  decree_chip: { vi: "✓ Sẵn sàng đáp ứng NĐ 254/2026/NĐ-CP về hoá đơn điện tử", en: "✓ Ready for Decree 254/2026/NĐ-CP on e-invoices" },
+  hero_h1: { vi: "Chụp hoá đơn.<br/><span class=\"hero-grad\">Sổ sách tự lo.</span>", en: "Snap the receipt.<br/><span class=\"hero-grad\">The books do themselves.</span>" },
   hero_p: { vi: "Gửi ảnh hoá đơn vào Zalo, <b>Sổ Sạch</b> tự ghi sổ thu chi, canh ngưỡng thuế giúp bạn và soạn sẵn tờ khai quý — bằng tiếng Việt dễ hiểu, không cần biết kế toán.", en: "Send a receipt photo on Zalo and <b>Sổ Sạch</b> writes your ledger, watches the tax thresholds for you and pre-fills the quarterly declaration — in plain language, no accounting needed." },
-  hero_cta1: { vi: "Dùng thử ngay — miễn phí", en: "Try it now — free" },
-  hero_cta2: { vi: "Xem cách hoạt động", en: "See how it works" },
+  // La coppia CTA unica (identica in hero / #how / #ways / pre-footer).
+  // La "→" vive nel testo HTML: Be Vietnam Pro copre U+2192.
+  cta_try: { vi: "Dùng thử ngay — miễn phí", en: "Try it now — free" },
+  cta_join: { vi: "Đăng ký 100 hộ đầu tiên →", en: "Join the first 100 →" },
   trust1: { vi: "📱 Chạy trong Zalo", en: "📱 Lives inside Zalo" },
   trust2: { vi: "🔔 Báo trước khi chạm ngưỡng thuế", en: "🔔 Warns before you cross tax thresholds" },
   trust3: { vi: "📄 Tờ khai 01/CNKD soạn sẵn", en: "📄 Form 01/CNKD pre-filled" },
@@ -63,6 +67,16 @@ const I18N = {
   how2_p: { vi: "Sổ Sạch đọc ảnh, tự phân loại thu/chi, ghi vào sổ. Sai thì sửa một chạm. Cuối tháng có tổng kết rõ ràng.", en: "Sổ Sạch reads the image, classifies income/expense, writes the entry. One tap to fix. Clear monthly summary." },
   how3_t: { vi: "Tờ khai soạn sẵn", en: "Declaration pre-filled" },
   how3_p: { vi: "Đến kỳ, tờ khai 01/CNKD đã điền sẵn số liệu. Ký, nộp — hoặc gửi thẳng cho đại lý thuế của bạn.", en: "When the quarter ends, form 01/CNKD is already filled in. Sign and file — or send it to your tax agent." },
+  // Sezione prova (ordine meInvoice, numeri onesti: le chip citano ciò che
+  // lo screenshot mostra davvero).
+  pf_kicker: { vi: "Sổ thật, số thật", en: "Real books, real numbers" },
+  pf_h2: { vi: "Đây là sổ của một quán bún bò", en: "This is a noodle shop's ledger" },
+  pf_p: { vi: "Không ảnh dựng, không số vẽ — màn hình thật của bản dùng thử, tính bằng chính công cụ thuế của sản phẩm.", en: "No mock-ups, no invented figures — a real screen from the live demo, computed by the product's actual tax engines." },
+  pf_chip1: { vi: "💎 Điểm Sổ Sạch 98/A", en: "💎 Sổ Sạch Score 98/A" },
+  pf_chip2: { vi: "Còn cách ngưỡng 1 tỷ ✓", en: "Still under the 1B threshold ✓" },
+  pf_chip3: { vi: "⏰ Hạn nộp tờ khai: 31/10/2026", en: "⏰ Filing deadline: 31/10/2026" },
+  pf_legal: { vi: "Mọi tờ khai Sổ Sạch tạo ra đều là <b>BẢN NHÁP</b> — số liệu thuế là ước tính, hãy kiểm tra với đại lý thuế của bạn trước khi nộp.", en: "Every declaration Sổ Sạch produces is a <b>DRAFT</b> — tax figures are estimates; check with your tax agent before filing." },
+  pf_count: { vi: "<b>{n}</b> hộ kinh doanh đã đăng ký danh sách chờ", en: "<b>{n}</b> household businesses already on the waitlist" },
   app_kicker: { vi: "Sổ của tôi · bản dùng thử", en: "My ledger · live demo" },
   app_h2: { vi: "Thử ngay trên web", en: "Try it on the web" },
   app_p: { vi: "Đây chính là sản phẩm — phiên bản web. Trên Zalo, mọi thứ diễn ra trong khung chat.", en: "This is the actual product — web edition. On Zalo, everything happens in the chat." },
@@ -340,10 +354,14 @@ async function renderAgency() {
 
 // ---- Danh sách chờ (thay cho mailto: — il lead resta, l'email si perde) ------------
 async function refreshWaitlistCount() {
-  const el = $("#wlCount");
-  if (!el) return;
+  // Due punti di rendita per lo stesso contatore: la riga nel banner Zalo
+  // (#wlCount) e il contatore della sezione prova (#proofCount).
+  const el = $("#wlCount"), pf = $("#proofCount");
+  if (!el && !pf) return;
   const r = await api("/api/waitlist/count");
-  el.innerHTML = r.ok && r.count > 0 ? T("wl_count", { n: r.count }) : "";
+  const has = r.ok && r.count > 0;
+  if (el) el.innerHTML = has ? T("wl_count", { n: r.count }) : "";
+  if (pf) pf.innerHTML = has ? T("pf_count", { n: r.count }) : "";
 }
 
 function waitlistModal() {
