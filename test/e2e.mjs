@@ -200,7 +200,21 @@ try {
   const stolen = await api("/api/declaration?year=2026&q=3");
   check("nemmeno la dichiarazione trapela senza token", () =>
     assert.notEqual(stolen.body.taxpayer, "Quán Cà Phê Cô Ba"));
+  // ?uid= può aprire solo sandbox anonime: i namespace "u:"/"zalo:" sono off-limits
+  const forged = await api(`/api/ledger?uid=u:${phone}`);
+  check("?uid=u:<phone> NON apre il libro dell'hộ (IDOR)", () => {
+    const mine = new Set(led.body.entries.map((e) => e.id));
+    assert.equal((forged.body.entries || []).filter((e) => mine.has(e.id)).length, 0);
+  });
+  await api(`/api/ledger?uid=u:${phone}`, { method: "POST",
+    body: JSON.stringify({ type: "chi", amount: 999_999, counterparty: "IDOR-PROBE" }) });
+  const sandbox = await api("/api/ledger?uid=wtestsandbox");
+  check("la sandbox anonima con ?uid= opaco funziona ancora", () =>
+    assert.ok(Array.isArray(sandbox.body.entries)));
   token = saved;
+  const after = await api("/api/ledger");
+  check("?uid=u:<phone> NON scrive nel libro dell'hộ (IDOR)", () =>
+    assert.equal(after.body.entries.filter((e) => e.counterparty === "IDOR-PROBE").length, 0));
 
   // --- riepilogo -----------------------------------------------------------
   console.log("\n\x1b[1mE2E — 01/CNKD, Quý 3 năm 2026\x1b[0m");

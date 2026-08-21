@@ -64,8 +64,18 @@ function rateLimit({ windowMs, max, globalMax, name }) {
   };
 }
 
-// uid del libro: account autenticato → "u:<phone>"; altrimenti demo pubblico.
-const uidFor = (req) => (req.phone ? "u:" + req.phone : String(req.query.uid || "demo"));
+// uid del libro: account autenticato → "u:<phone>"; altrimenti sandbox anonima.
+// ?uid= arriva dal client e NON deve mai poter indirizzare i namespace
+// riservati ("u:<phone>", "zalo:<id>"): senza questo filtro chiunque, senza
+// token, leggeva e scriveva il libro di un account reale indovinando il
+// telefono. Le sandbox anonime del sito sono id opachi senza ":" (public/app.js),
+// quindi ammettiamo solo quelli; tutto il resto ricade su "demo".
+const SANDBOX_UID = /^[A-Za-z0-9_-]{1,64}$/;
+const uidFor = (req) => {
+  if (req.phone) return "u:" + req.phone;
+  const q = String(req.query.uid || "");
+  return SANDBOX_UID.test(q) ? q : "demo";
+};
 
 // Libro per un utente Zalo: se il suo zaloId è collegato a un account →
 // "u:<phone>" (visibile su web e all'đại lý thuế); altrimenti "zalo:<id>".
