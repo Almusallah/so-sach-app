@@ -1,6 +1,8 @@
 # Sổ Sạch × MISA meInvoice — superficie di integrazione e posizione
 *(ricerca 2026-08-21, fonti primarie: doc.meinvoice.vn, misa.vn, contratto CTV pubblico)*
 
+> **Correzione 2026-08-21** (verificata su chinhphu.vn): il **Decreto 254/2026/NĐ-CP** (emesso 30/06/2026, in vigore 01/07/2026, attuativo della Legge 108/2025/QH15) **abroga** i Decreti 123/2020 e 70/2025 (e l'art. 1 del 41/2022) riprendendone la sostanza MTT sopra 1 tỷ — i riferimenti al 70/2025 qui sotto restano come contesto storico; deck e brief in docs/ sono stati riallineati in pari data.
+
 ## Cosa esiste tecnicamente
 - **Open API fatture ATTIVE (pubblica, gratuita)**: `https://api.meinvoice.vn/api/v3` (+ testapi),
   REST/JSON, Bearer JWT 14gg via `POST /api/integration/auth/token` {appid, taxcode,

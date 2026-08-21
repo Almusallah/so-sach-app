@@ -128,9 +128,14 @@ def build(lang, out):
          ("lump-sum assessment replaced by self-declaration on real books" if E
           else "accertamento forfettario sostituito da autodichiarazione su libri veri"),
          "5.2M hộ kinh doanh"],
-        [("Decree 70/2025" if E else "Decreto 70/2025"),
-         ("e-invoicing from a connected cash register above 1 tỷ VND annual revenue" if E
-          else "e-fattura da registratore connesso sopra 1 tỷ VND di ricavi annui"),
+        # niente "→" nemmeno qui: stesso buco glifo U+2192 di Avenir Next.
+        # 70/2025 abrogato dal 254/2026 (01/07/2026): si cita la norma viva,
+        # tenendo il 70/2025 come origine storica dell'obbligo.
+        [("Decree 70/2025, now Decree 254/2026" if E else "Decreto 70/2025, oggi Decreto 254/2026"),
+         ("e-invoicing from a connected cash register above 1 tỷ VND annual revenue "
+          "(in force 01/07/2026)" if E
+          else "e-fattura da registratore connesso sopra 1 tỷ VND di ricavi annui "
+               "(in vigore dal 01/07/2026)"),
          ("the upper tier — and the ones who cross it unknowingly" if E
           else "la fascia alta — e chi la supera senza saperlo")],
         [("Decree 141/2026" if E else "Decreto 141/2026"),

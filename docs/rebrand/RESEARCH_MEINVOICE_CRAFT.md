@@ -26,7 +26,8 @@ la home EN gira sul sistema legacy (GoogleSans, #1877F2, tre bottoni a semaforo)
 2. Coppia CTA unica ripetuta: gradiente giada + hairline con "→".
 3. Piastre sezione raggio 24 alternate bianco/giada-wash; atti da ~80px.
 4. Screenshot veri + chip di annotazione bianche (basta illustrazione ovunque).
-5. Chip decreto in hero (⚠️ citare il decreto CORRENTE — verificare 254/2026).
+5. Chip decreto in hero (citare il decreto CORRENTE — verificato 2026-08-21 su
+   chinhphu.vn: 254/2026/NĐ-CP, in vigore dal 01/07/2026, abroga 123/2020 e 70/2025).
 6. Stack di prove nel LORO ordine, ai nostri numeri onesti.
 7. Ombre two-layer spread-negativo già giada-tinted: upgrade della ricetta.
 8. Card cattura-lead in hero, telefono/Zalo-first.

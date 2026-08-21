@@ -67,8 +67,10 @@ def build(lang, out):
           else "Prima dichiarazione trimestrale nel nuovo regime"),
          ("Deadline recurs 4× a year, forever" if E else "La scadenza torna 4 volte l'anno, per sempre")],
         [("2025–26" if E else "2025–26"),
-         ("Decree 70/2025: e-invoicing from cash registers above 1 billion VND revenue" if E
-          else "Decreto 70/2025: e-fattura da registratore di cassa sopra 1 miliardo VND di ricavi"),
+         ("Decree 70/2025: e-invoicing from cash registers above 1 billion VND revenue "
+          "(now carried in Decree 254/2026, in force 01/07/2026)" if E
+          else "Decreto 70/2025: e-fattura da registratore di cassa sopra 1 miliardo VND di ricavi "
+               "(oggi nel Decreto 254/2026, in vigore dal 01/07/2026)"),
          ("A threshold nobody can see without a book" if E
           else "Una soglia invisibile senza un libro")],
     ], [90, 400, 260], MARG, H - 47 * mm)

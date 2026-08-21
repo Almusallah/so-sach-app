@@ -63,8 +63,10 @@ def build(lang, out):
          ("Q4 deadline — and then every quarter, permanently" if E
           else "Scadenza Q4 — e poi ogni trimestre, per sempre"), ("all" if E else "tutte")],
         ["2025–26",
-         ("Decree 70/2025 — e-invoicing from a connected register above 1 billion VND" if E
-          else "Decreto 70/2025 — e-fattura da registratore connesso sopra 1 miliardo VND"),
+         ("Decree 70/2025 — e-invoicing from a connected register above 1 billion VND "
+          "(now carried in Decree 254/2026, in force 01/07/2026)" if E
+          else "Decreto 70/2025 — e-fattura da registratore connesso sopra 1 miliardo VND "
+               "(oggi nel Decreto 254/2026, in vigore dal 01/07/2026)"),
          ("upper tier" if E else "fascia alta")],
     ], [92, 500, 125], MARG, H - 64 * mm, fs=9.8)
     bullets(c, [
