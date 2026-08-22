@@ -40,6 +40,12 @@ export async function initStore(dataDir) {
         connectionString: process.env.DATABASE_URL,
         ssl: process.env.DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false },
         max: 5,
+        // Senza questi limiti una query verso un DB irraggiungibile resta
+        // appesa per sempre — e le scritture durevoli qui sotto DEVONO poter
+        // fallire in fretta: l'utente aspetta la conferma della propria voce.
+        connectionTimeoutMillis: 3000,
+        query_timeout: 4000,
+        statement_timeout: 4000,
       });
       await pool.query(`CREATE TABLE IF NOT EXISTS docs (
         kind text NOT NULL, key text NOT NULL, doc jsonb NOT NULL,
@@ -78,18 +84,205 @@ async function upsert(kind, key, doc) {
   }
 }
 
-// Write-through: aggiorna file (JSON mode) o riga (PG mode). Fire-and-forget OK.
+// ---- Scritture durevoli -------------------------------------------------------
+// IL PROBLEMA. In modalità Postgres ogni persist era fire-and-forget: il bot
+// diceva "✅ Đã ghi vào Sổ Sạch" PRIMA che la UPSERT toccasse il disco. Un
+// crash (o un DB irraggiungibile) nel momento sbagliato perdeva una voce già
+// confermata all'utente — in un registro FISCALE è il guasto peggiore: la
+// promessa del prodotto è esattamente "quello che ti confermo è nel sổ".
+//
+// LA FORMA. Tre pezzi, componibili:
+//   1. una CODA PER CHIAVE (book:uid / account:phone / lead:phone): tutte le
+//      scritture della stessa chiave si serializzano, così un rollback non può
+//      mai calpestare una mutazione successiva e due UPSERT della stessa riga
+//      non possono superarsi sul filo (pool max 5 = connessioni multiple:
+//      senza coda, l'ordine d'arrivo in tabella non è garantito);
+//   2. RETRY corto con backoff (3 tentativi, 250/500 ms) sopra i timeout del
+//      pool: un blip di rete non diventa un 503, un DB giù fallisce in fretta;
+//   3. mutateBookDurable(): snapshot → mutazione → persist; se il persist
+//      fallisce dopo i retry, la MEMORIA torna allo snapshot e il chiamante
+//      risponde "non salvato, riprova" — mai una conferma per una voce che
+//      esiste solo in RAM (al prossimo deploy sparirebbe), mai una voce in RAM
+//      dopo un "riprova" (al reinvio diventerebbe un doppione).
+// In modalità JSON writeFileSync è sincrona: stessa semantica, stesso rollback
+// se il filesystem lancia (disco pieno).
+
+// Gancio SOLO test: i fallimenti di persistenza non si possono provocare a
+// comando su un DB vero, quindi il test li inietta qui. Ignorato fuori da
+// NODE_ENV=test.
+export const _durability = { failNext: 0, delayNextMs: 0 };
+async function maybeFailForTest() {
+  if (process.env.NODE_ENV !== "test") return;
+  if (_durability.delayNextMs > 0) {
+    // Rallenta UN persist: serve al test che prova che la coda serializza
+    // DAVVERO (in modalità JSON writeFileSync è sincrona e senza questo delay
+    // due mutazioni "concorrenti" non potrebbero mai interleave).
+    const d = _durability.delayNextMs;
+    _durability.delayNextMs = 0;
+    await new Promise((r) => setTimeout(r, d));
+  }
+  if (_durability.failNext > 0) {
+    _durability.failNext--;
+    throw new Error("test-induced persist failure");
+  }
+}
+
+const PERSIST_ATTEMPTS = 3;
+async function withRetry(fn) {
+  let lastErr;
+  for (let i = 0; i < PERSIST_ATTEMPTS; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 250 * i));
+    try { return await fn(); } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
+// Coda per chiave. La tail si ripulisce quando è ancora lei l'ultima: la mappa
+// non cresce con gli uid che smettono di scrivere.
+const queues = new Map();
+function enqueue(qkey, task) {
+  const prev = queues.get(qkey) || Promise.resolve();
+  const run = prev.then(task, task);       // parte comunque, anche dopo un errore
+  const tail = run.catch(() => {});
+  queues.set(qkey, tail);
+  tail.then(() => { if (queues.get(qkey) === tail) queues.delete(qkey); });
+  return run;
+}
+
+// Il persist grezzo di UNA chiave, letto al momento dell'esecuzione (mai
+// serializzare il doc alla chiamata: in coda potrebbe già essere cambiato).
+async function persistNow(kind, key) {
+  await maybeFailForTest();
+  if (mode === "json") {
+    const file = { book: FILE_BOOKS, account: FILE_ACCTS, lead: FILE_LEADS }[kind];
+    const data = { book: books, account: accounts, lead: leads }[kind];
+    writeFileSync(file(), JSON.stringify(data, null, 2));
+    return;
+  }
+  await withRetry(() => upsert(kind, key, { book: books, account: accounts, lead: leads }[kind][key]));
+}
+
+// Mutazione FISCALE durevole di un libro: l'unica via ammessa per toccare
+// entries. Torna { ok:true, result } o { ok:false, error } — mai lancia per un
+// persist fallito (il chiamante deve poter rispondere all'utente).
+export function mutateBookDurable(uid, mutate) {
+  return enqueue("book:" + uid, async () => {
+    const existed = Object.prototype.hasOwnProperty.call(books, uid);
+    const snapshot = existed ? JSON.stringify(books[uid]) : null;
+    let result;
+    try {
+      result = mutate(getBook(uid));
+    } catch (e) {
+      // la mutazione stessa è scoppiata: è un bug di programmazione, si
+      // ripristina e si rilancia — mai persistere uno stato a metà
+      if (existed) books[uid] = JSON.parse(snapshot); else delete books[uid];
+      throw e;
+    }
+    try {
+      await persistNow("book", uid);
+      return { ok: true, result };
+    } catch (e) {
+      if (existed) books[uid] = JSON.parse(snapshot); else delete books[uid];
+      console.error(`store: scrittura NON durevole su ${uid} — rollback in memoria.`, e.message);
+      return { ok: false, error: e.message };
+    }
+  });
+}
+
+// Fusione durevole di DUE libri, sotto ENTRAMBE le code.
+// IL BUG CHE PREVIENE (trovato dal verifier prima del commit): il merge girava
+// solo nella coda della destinazione, quindi una voce scritta sulla SORGENTE
+// mentre il merge attendeva la propria UPSERT — "thu 300k" e il tocco sul
+// claim-link nello stesso secondo, la sequenza canonica dell'onboarding —
+// veniva confermata all'utente e poi CANCELLATA dal removeBook. Qui il corpo
+// parte solo quando è in testa a TUTTE E DUE le code e le tiene bloccate fino
+// alla rimozione della sorgente: una scrittura concorrente o arriva PRIMA
+// (e viene fusa) o si accoda DOPO (a sorgente già rimossa). Nessun deadlock:
+// questo è l'unico punto che prende due code, sempre nello stesso ordine.
+export function mergeBooksDurable(srcUid, dstUid, mutate) {
+  if (srcUid === dstUid) throw new Error("mergeBooksDurable: src e dst coincidono");
+  let arrived = 0, release;
+  const bothAtHead = new Promise((r) => { release = r; });
+  const body = (async () => {
+    await bothAtHead;
+    const srcExisted = Object.prototype.hasOwnProperty.call(books, srcUid);
+    const dstExisted = Object.prototype.hasOwnProperty.call(books, dstUid);
+    const srcSnap = srcExisted ? JSON.stringify(books[srcUid]) : null;
+    const dstSnap = dstExisted ? JSON.stringify(books[dstUid]) : null;
+    const restore = () => {
+      if (srcExisted) books[srcUid] = JSON.parse(srcSnap); else delete books[srcUid];
+      if (dstExisted) books[dstUid] = JSON.parse(dstSnap); else delete books[dstUid];
+    };
+    let result;
+    try { result = mutate(books[srcUid] || null, getBook(dstUid)); }
+    catch (e) { restore(); throw e; }
+    try { await persistNow("book", dstUid); }
+    catch (e) {
+      restore();
+      console.error(`store: merge ${srcUid}→${dstUid} NON durevole — rollback.`, e.message);
+      return { ok: false, error: e.message };
+    }
+    // Destinazione durevole: ora la sorgente si rimuove INLINE (mai via
+    // removeBook: accoderebbe sulla coda che stiamo bloccando → deadlock).
+    // Se la rimozione fallisce, al riavvio la sorgente risorge con voci già
+    // copiate — un doppione rumoroso, mai una perdita.
+    try {
+      delete books[srcUid];
+      if (mode === "postgres" && pool) {
+        await withRetry(() => pool.query("DELETE FROM docs WHERE kind='book' AND key=$1", [srcUid]));
+      } else if (mode === "json") {
+        writeFileSync(FILE_BOOKS(), JSON.stringify(books, null, 2));
+      }
+    } catch (e) { console.error(`store: merge ${srcUid}→${dstUid}: rimozione sorgente fallita (doppione al riavvio).`, e.message); }
+    return { ok: true, result };
+  })();
+  const join = () => { if (++arrived === 2) release(); return body.catch(() => {}); };
+  enqueue("book:" + srcUid, join);
+  enqueue("book:" + dstUid, join);
+  return body;
+}
+
+// Persist durevoli e awaitabili per account e lead (niente rollback interno:
+// la mutazione avviene nel chiamante, che sa cosa ripristinare).
+export function persistAccountDurable(phone) {
+  return enqueue("account:" + phone, async () => {
+    try { await persistNow("account", phone); return { ok: true }; }
+    catch (e) {
+      console.error(`store: account ${phone} NON durevole.`, e.message);
+      return { ok: false, error: e.message };
+    }
+  });
+}
+export function persistLeadDurable(phone) {
+  return enqueue("lead:" + phone, async () => {
+    try { await persistNow("lead", phone); return { ok: true }; }
+    catch (e) {
+      console.error(`store: lead ${phone} NON durevole.`, e.message);
+      return { ok: false, error: e.message };
+    }
+  });
+}
+
+// Write-through legacy per i metadati NON fiscali (flag claim, timestamp di
+// push Sheets…): il chiamante non aspetta, ma la scrittura passa comunque
+// dalla coda della chiave — l'ordine con le scritture durevoli resta garantito.
 export function persistBook(uid) {
-  if (mode === "json") writeFileSync(FILE_BOOKS(), JSON.stringify(books, null, 2));
-  else upsert("book", uid, books[uid]).catch((e) => console.error("persistBook:", e.message));
+  enqueue("book:" + uid, async () => {
+    if (!Object.prototype.hasOwnProperty.call(books, uid)) return; // rimosso nel frattempo
+    await persistNow("book", uid);
+  }).catch((e) => console.error("persistBook:", e.message));
 }
 export function persistAccount(phone) {
-  if (mode === "json") writeFileSync(FILE_ACCTS(), JSON.stringify(accounts, null, 2));
-  else upsert("account", phone, accounts[phone]).catch((e) => console.error("persistAccount:", e.message));
+  enqueue("account:" + phone, async () => {
+    if (!Object.prototype.hasOwnProperty.call(accounts, phone)) return;
+    await persistNow("account", phone);
+  }).catch((e) => console.error("persistAccount:", e.message));
 }
 export function persistLead(phone) {
-  if (mode === "json") writeFileSync(FILE_LEADS(), JSON.stringify(leads, null, 2));
-  else upsert("lead", phone, leads[phone]).catch((e) => console.error("persistLead:", e.message));
+  enqueue("lead:" + phone, async () => {
+    if (!Object.prototype.hasOwnProperty.call(leads, phone)) return;
+    await persistNow("lead", phone);
+  }).catch((e) => console.error("persistLead:", e.message));
 }
 // await-abile: il refresh token Zalo va persistito PRIMA di essere usato, o un
 // crash nel mezzo lascia in DB una catena di token già invalidata da Zalo.
@@ -106,11 +299,16 @@ export function getBook(uid) {
 }
 
 // Rimuove un libro (usato quando un libro Zalo viene fuso in un account).
+// Passa dalla coda della chiave e si può await-are: nel merge la rimozione
+// della sorgente deve avvenire DOPO che la destinazione è durevole — un crash
+// in mezzo lascia al peggio un doppione visibile, mai una voce persa.
 export function removeBook(uid) {
-  delete books[uid];
-  if (mode === "postgres" && pool) {
-    pool.query("DELETE FROM docs WHERE kind='book' AND key=$1", [uid]).catch((e) => console.error("removeBook:", e.message));
-  } else if (mode === "json") {
-    writeFileSync(FILE_BOOKS(), JSON.stringify(books, null, 2));
-  }
+  return enqueue("book:" + uid, async () => {
+    delete books[uid];
+    if (mode === "postgres" && pool) {
+      await withRetry(() => pool.query("DELETE FROM docs WHERE kind='book' AND key=$1", [uid]));
+    } else if (mode === "json") {
+      writeFileSync(FILE_BOOKS(), JSON.stringify(books, null, 2));
+    }
+  });
 }

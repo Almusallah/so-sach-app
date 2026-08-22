@@ -19,7 +19,11 @@ import { matchCommand, matchCommandFuzzy, matchLangCommand, normalize, menuText,
 import { makePendingStore } from "./src/pending.js";
 import { buildDeclaration } from "./src/declaration.js";
 import { bootstrapFromEnv, exchangeOaCode } from "./src/zalo_token.js";
-import { initStore, storeMode, books, accounts, leads, getBook, persistBook, persistAccount, persistLead, removeBook } from "./src/store.js";
+import {
+  initStore, storeMode, books, accounts, leads, getBook,
+  persistBook, persistAccount,
+  mutateBookDurable, mergeBooksDurable, persistAccountDurable, persistLeadDurable, _durability,
+} from "./src/store.js";
 import { register, login, publicAccount, findAgentByCode, findAccountByZaloId, createLinkCode, consumeLinkCode, authOptional, requireAuth, normalizePhone } from "./src/auth.js";
 import { PLANS, payosEnabled, createPaymentLink, verifyPayosWebhook, activateSub, subActive } from "./src/billing.js";
 import { sosachScore } from "./src/score.js";
@@ -89,23 +93,71 @@ const zaloBookUid = (zaloId) => {
 };
 
 // Fonde il libro Zalo pre-collegamento nell'account e rimuove l'orfano.
-function mergeZaloBook(zaloId, phone) {
-  const src = books["zalo:" + zaloId];
-  if (!src || !src.entries?.length) return 0;
-  const dst = getBook("u:" + phone);
-  const n = src.entries.length;
-  dst.entries.push(...src.entries);
-  // L'eventuale config Google Sheets migra sul libro di destinazione PRIMA
-  // del removeBook: un timer di push pendente sul libro cancellato non deve
-  // poterlo ricreare vuoto (Code.gs fa clearContents — spazzerebbe il foglio).
-  if (src.profile?.sheets && !dst.profile.sheets) dst.profile.sheets = src.profile.sheets;
-  removeBook("zalo:" + zaloId);
-  persistBook("u:" + phone);
+// Gira sotto ENTRAMBE le code (mergeBooksDurable): una voce concorrente sulla
+// sorgente o arriva prima (fusa) o si accoda dopo (sorgente già rimossa —
+// vedi writeZaloEntry per il re-instradamento). La destinazione è durevole
+// PRIMA della rimozione della sorgente: un crash in mezzo lascia al peggio un
+// doppione visibile al riavvio, mai una perdita.
+// Torna { ok:true, moved } oppure { ok:false, error } (niente merge avvenuto).
+async function mergeZaloBook(zaloId, phone) {
+  const srcUid = "zalo:" + zaloId, dstUid = "u:" + phone;
+  if (!books[srcUid]?.entries?.length) return { ok: true, moved: 0 };
+  const out = await mergeBooksDurable(srcUid, dstUid, (src, dst) => {
+    if (!src?.entries?.length) return 0;
+    dst.entries.push(...src.entries);
+    // L'eventuale config Google Sheets migra sul libro di destinazione PRIMA
+    // della rimozione: un timer di push pendente sul libro cancellato non deve
+    // poterlo ricreare vuoto (Code.gs fa clearContents — spazzerebbe il foglio).
+    if (src.profile?.sheets && !dst.profile.sheets) dst.profile.sheets = src.profile.sheets;
+    return src.entries.length;
+  });
+  if (!out.ok) return { ok: false, error: out.error };
   // Il libro fuso è appena cambiato (voci nuove e/o config Sheets migrata):
   // senza questo touch il foglio dell'account resta indietro fino alla
   // PROSSIMA mutazione — che può arrivare fra giorni.
-  sheetsQueue.touch("u:" + phone);
-  return n;
+  sheetsQueue.touch(dstUid);
+  return { ok: true, moved: out.result };
+}
+
+// Scrive UNA voce sul libro Zalo giusto anche quando un claim/link fonde il
+// libro DURANTE l'elaborazione: l'estrazione foto dura secondi, e "manda la
+// ricevuta, tocca subito il claim-link" è la sequenza canonica. Dopo la
+// scrittura durevole si ricontrolla l'instradamento: se nel frattempo lo
+// zaloId si è collegato a un account, la voce non deve restare su un libro
+// orfano invisibile — la si sposta (dedup per id: se il merge l'ha già
+// copiata, non si duplica).
+async function writeZaloEntry(zaloId, entry) {
+  const writeUid = zaloBookUid(zaloId);
+  let saved = await mutateBookDurable(writeUid, (b) => { b.entries.push(entry); });
+  if (!saved.ok) return { ok: false, uid: writeUid };
+  const freshUid = zaloBookUid(zaloId);
+  if (freshUid === writeUid) return { ok: true, uid: writeUid };
+  if (books[writeUid]?.entries?.some((e) => e.id === entry.id)) {
+    await mutateBookDurable(writeUid, (b) => {
+      const i = b.entries.findIndex((e) => e.id === entry.id);
+      if (i >= 0) b.entries.splice(i, 1);
+    });
+  }
+  saved = await mutateBookDurable(freshUid, (b) => {
+    if (!b.entries.some((e) => e.id === entry.id)) b.entries.push(entry);
+  });
+  return { ok: saved.ok, uid: freshUid };
+}
+
+// I due volti di "non ho potuto salvare": la promessa del prodotto è che una
+// voce CONFERMATA è nel sổ, quindi quando la persistenza fallisce l'unica
+// risposta onesta è "niente è stato registrato, riprova" — mai la conferma.
+const SAVE_FAIL_VI = "Chưa lưu được vào sổ — hệ thống lưu trữ đang gặp sự cố, chưa có gì được ghi. Bạn thử lại giúp mình nhé.";
+const saveFailText = (lang) => lang === "en"
+  ? "⚠️ I couldn't save that to your book (storage hiccup) — nothing was recorded. Please try again in a minute."
+  : "⚠️ Mình chưa lưu được vào sổ (hệ thống lưu trữ đang gặp sự cố) — chưa có gì được ghi. Bạn thử lại sau một phút nhé.";
+
+// Rifiuto DENTRO una mutazione durevole: lanciare questo dentro il callback di
+// mutateBookDurable ripristina lo snapshot e NON persiste nulla — serve al
+// "khai", dove applyOpening può applicare il thu e scartare il chi, e il
+// messaggio all'utente dice "chưa ghi được": la memoria deve dire lo stesso.
+class RefuseMutation extends Error {
+  constructor(payload) { super("refused"); this.payload = payload; }
 }
 
 // ---- Google Sheets: motore di push ------------------------------------------------
@@ -351,12 +403,14 @@ async function handleZaloEvent(event) {
           await sendText(uid, formatLowConfidenceMessage(entry, lang));
           return;
         }
-        const b = getBook(bookUid);
-        b.entries.push(entry);
-        persistBook(bookUid);
-        sheetsQueue.touch(bookUid);   // vista Sheets: push dopo la quiete
+        // Durevole PRIMA della conferma: "✅ Đã ghi" si dice solo a voce su
+        // disco. writeZaloEntry ricontrolla l'instradamento: un claim arrivato
+        // durante i secondi dell'estrazione non lascia la voce su un orfano.
+        const saved = await writeZaloEntry(uid, entry);
+        if (!saved.ok) { await sendText(uid, saveFailText(lang)); return; }
+        sheetsQueue.touch(saved.uid);   // vista Sheets: push dopo la quiete
         // Prima voce di un uid non collegato → CTA claim UNA volta (spec).
-        await sendText(uid, formatEntryMessage(entry, lang) + claimCtaFor(uid, bookUid, lang));
+        await sendText(uid, formatEntryMessage(entry, lang) + claimCtaFor(uid, saved.uid, lang));
       }
     } else if (event.event_name === "user_send_text") {
       const rawText = (event?.message?.text || "").trim();
@@ -369,17 +423,20 @@ async function handleZaloEvent(event) {
       //     prosegue nel router — mai un messaggio in più da spiegare.
       const pendingDelete = pendingDeletes.take(uid);
       if (pendingDelete && normalize(rawText) === "1") {
-        const b = getBook(bookUid);
-        const idx = b.entries.findIndex((e) => e.id === pendingDelete.entryId);
-        if (idx === -1) {
+        // Ricerca e splice DENTRO la mutazione: atomici rispetto alla coda.
+        const saved = await mutateBookDurable(bookUid, (b) => {
+          const idx = b.entries.findIndex((e) => e.id === pendingDelete.entryId);
+          return idx === -1 ? null : b.entries.splice(idx, 1)[0];
+        });
+        if (!saved.ok) { await sendText(uid, saveFailText(lang)); return; }
+        const gone = saved.result;
+        if (!gone) {
           // cancellata nel frattempo (web, altro dispositivo): niente da fare
           await sendText(uid, lang === "en"
             ? "That entry is no longer in the book — nothing to delete."
             : "Bút toán đó không còn trong sổ nữa — không có gì để xoá.");
           return;
         }
-        const gone = b.entries.splice(idx, 1)[0];
-        persistBook(bookUid);
         sheetsQueue.touch(bookUid);   // vista Sheets: push dopo la quiete
         const vnd = (n) => Number(n || 0).toLocaleString("vi-VN") + "đ";
         await sendText(uid, lang === "en"
@@ -404,12 +461,18 @@ async function handleZaloEvent(event) {
       if (pendingEntry) {
         const choice = normalize(rawText);
         if (choice === "1") {
-          const b = getBook(bookUid);
-          b.entries.push(pendingEntry);   // provenance "photo" già sulla voce
-          persistBook(bookUid);
-          sheetsQueue.touch(bookUid);     // vista Sheets: push dopo la quiete
+          // provenance "photo" già sulla voce; durevole prima della conferma
+          const saved = await writeZaloEntry(uid, pendingEntry);
+          if (!saved.ok) {
+            // la proposta torna in sospeso: il "riprova" dell'utente è un
+            // nuovo "1", non una nuova foto
+            pendingPhotos.put(uid, pendingEntry);
+            await sendText(uid, saveFailText(lang));
+            return;
+          }
+          sheetsQueue.touch(saved.uid);   // vista Sheets: push dopo la quiete
           // Anche il "1" di conferma è una scrittura: la CTA claim vale qui.
-          await sendText(uid, formatEntryMessage(pendingEntry, lang) + claimCtaFor(uid, bookUid, lang));
+          await sendText(uid, formatEntryMessage(pendingEntry, lang) + claimCtaFor(uid, saved.uid, lang));
           return;
         }
         if (choice === "2" || choice === "3") {
@@ -431,8 +494,9 @@ async function handleZaloEvent(event) {
       // 1) È un codice di collegamento valido? → collega l'account e fondi il sổ.
       //    Gira PRIMA di tutto il resto, fuzzy compreso: un codice sbagliato di
       //    una lettera deve restare un codice sbagliato, mai diventare un comando.
-      const linkPhone = /^[A-Z0-9]{6}$/.test(rawText.toUpperCase())
+      const linkRes = /^[A-Z0-9]{6}$/.test(rawText.toUpperCase())
         ? consumeLinkCode(rawText, uid) : null;
+      const linkPhone = linkRes?.phone || null;
       // 2) Cambio lingua: ESATTO dopo normalize, mai fuzzy (commands.js).
       const langSwitch = matchLangCommand(rawText);
       // 3) Parser strutturati + comandi. Il fuzzy (distanza ≤ 1) si tenta SOLO
@@ -443,7 +507,38 @@ async function handleZaloEvent(event) {
       const cmd = matchCommand(rawText) ||
         (khai || money || langSwitch ? null : matchCommandFuzzy(rawText));
       if (linkPhone) {
-        const moved = mergeZaloBook(uid, linkPhone);
+        // ORDINE: prima il MERGE (durevole), poi il collegamento (durevole).
+        // Così un fallimento a metà non lascia mai un collegamento durevole
+        // con un libro non fuso — lo stato "linkato a metà" risorgerebbe al
+        // riavvio con le voci Zalo invisibili per sempre. consumeLinkCode ha
+        // toccato solo la MEMORIA: il rollback qui sotto la ripristina e può
+        // dire onestamente "nulla è cambiato".
+        const linkedAcct = accounts[linkPhone];
+        const unlink = () => {
+          if (linkRes.prevZaloId) linkedAcct.zaloId = linkRes.prevZaloId;
+          else delete linkedAcct.zaloId;
+        };
+        const merged = await mergeZaloBook(uid, linkPhone);
+        if (!merged.ok) {
+          unlink();   // niente di durevole è cambiato
+          await sendText(uid, lang === "en"
+            ? "⚠️ I couldn't complete the link (storage hiccup) — nothing changed. Get a fresh code on the website and try again."
+            : "⚠️ Mình chưa kết nối được (hệ thống lưu trữ đang gặp sự cố) — chưa có gì thay đổi. Bạn lấy mã mới trên web rồi gửi lại nhé.");
+          return;
+        }
+        const acctSaved = await persistAccountDurable(linkPhone);
+        if (!acctSaved.ok) {
+          // il libro è GIÀ fuso (durevole) ma il collegamento no: si scollega
+          // la memoria e si chiede un mã mới — al retry il merge è un no-op
+          // (moved 0) e resta solo il collegamento da rendere durevole.
+          unlink();
+          persistAccount(linkPhone);   // best effort, coerenza memoria↔disco
+          await sendText(uid, lang === "en"
+            ? "⚠️ Your entries were moved but the link didn't stick (storage hiccup). Get a fresh code on the website and send it again."
+            : "⚠️ Bút toán đã được chuyển nhưng kết nối chưa lưu được (hệ thống lưu trữ đang gặp sự cố). Bạn lấy mã mới trên web rồi gửi lại nhé.");
+          return;
+        }
+        const moved = merged.moved;
         const acct = accounts[linkPhone];
         // Dopo il merge il libro è quello dell'ACCOUNT: la lingua giusta per
         // la conferma è la sua (scelta sul web), non quella del libro Zalo
@@ -460,9 +555,8 @@ async function handleZaloEvent(event) {
         // La conferma arriva nella lingua NUOVA: è la prova immediata che il
         // cambio ha preso. Persistita sul profilo del libro → vale anche sul
         // web (stesso campo di /api/profile).
-        const b = getBook(bookUid);
-        b.profile.lang = langSwitch;
-        persistBook(bookUid);
+        const saved = await mutateBookDurable(bookUid, (b) => { b.profile.lang = langSwitch; });
+        if (!saved.ok) { await sendText(uid, saveFailText(lang)); return; }
         await sendText(uid, langSwitch === "en"
           ? `✅ English it is. Fiscal terms stay in Vietnamese (01/CNKD, tờ khai, GTGT, TNCN, hạn nộp) — those are the names your tax office uses.\nType "menu" to see the commands · gõ "tiếng việt" để quay lại.`
           : `✅ Đã chuyển sang tiếng Việt.\nGõ "menu" để xem các lệnh · type "english" for English.`);
@@ -528,23 +622,36 @@ async function handleZaloEvent(event) {
             `• khai quý 1 thu 0 — xoá số đã khai\n\n` +
             `Số tự khai được ghi riêng (chưa có chứng từ) và không được cộng Điểm Sổ Sạch.`);
         } else {
-          const b = getBook(bookUid);
           const now = new Date();
           const { year } = quarterOf(now);
-          const res = applyOpening(b, { year, quarters: { [k.q]: { revenue: k.revenue, expenses: k.expenses } } });
-          if (res.error || res.skipped?.length) {
+          // applyOpening gira DENTRO la mutazione durevole; un rifiuto lancia
+          // RefuseMutation → rollback: prima "khai quý 1 thu 360tr chi -5tr"
+          // teneva il thu in memoria mentre il messaggio diceva "chưa ghi được".
+          let saved;
+          try {
+            saved = await mutateBookDurable(bookUid, (b) => {
+              const r = applyOpening(b, { year, quarters: { [k.q]: { revenue: k.revenue, expenses: k.expenses } } });
+              if (r.error || r.skipped?.length) throw new RefuseMutation(r);
+              return r;
+            });
+          } catch (e) {
+            if (!(e instanceof RefuseMutation)) throw e;
             // un'apertura scartata in silenzio è il bug d'origine di opening.js:
             // il motivo del rifiuto arriva fino all'utente, in vietnamita
-            const why = res.error || res.skipped[0]?.why || "";
+            const why = e.payload.error || e.payload.skipped?.[0]?.why || "";
             await sendText(uid, `⛔ Chưa ghi được số tự khai.\n` + (
               /future/.test(why)
                 ? `Quý ${k.q}/${year} chưa tới — chỉ khai được các quý đã qua hoặc quý hiện tại.`
                 : /1-4/.test(why)
                   ? `Quý phải từ 1 đến 4 (bạn gõ quý ${k.q}).`
                   : `Bạn kiểm tra lại cú pháp giúp mình: "khai quý 1 thu 360tr".`));
-          } else {
-            persistBook(bookUid);
+            return;
+          }
+          if (!saved.ok) { await sendText(uid, saveFailText(lang)); return; }
+          const res = saved.result;
+          {
             sheetsQueue.touch(bookUid);   // vista Sheets: push dopo la quiete
+            const b = getBook(bookUid);
             const t = totals(b.entries, { year });
             const st = thresholdStatus(projectAnnual(t.revenue, now));
             const left = Math.max(0, st.taxFree.limit - st.projection);
@@ -636,12 +743,11 @@ async function handleZaloEvent(event) {
             provenance: "manual",
             createdAt: new Date().toISOString(),
           };
-          const b = getBook(bookUid);
-          b.entries.push(entry);
-          persistBook(bookUid);
-          sheetsQueue.touch(bookUid);   // vista Sheets: push dopo la quiete
+          const saved = await writeZaloEntry(uid, entry);
+          if (!saved.ok) { await sendText(uid, saveFailText(lang)); return; }
+          sheetsQueue.touch(saved.uid);   // vista Sheets: push dopo la quiete
           // Scrittura a mano = stesso momento magico della foto: CTA claim.
-          await sendText(uid, formatEntryMessage(entry, lang) + claimCtaFor(uid, bookUid, lang));
+          await sendText(uid, formatEntryMessage(entry, lang) + claimCtaFor(uid, saved.uid, lang));
         }
       } else {
         // Il testo sconosciuto riceve il menu: è output di menuText, quindi
@@ -798,12 +904,18 @@ app.get("/api/config", (_req, res) =>
 );
 
 // ---- Auth ----------------------------------------------------------------------
-app.post("/api/auth/register", (req, res) => {
+app.post("/api/auth/register", async (req, res) => {
   const out = register(req.body || {});
   if (out.error) return res.status(400).json({ error: out.error });
-  // il libro nasce col nome dell'account
-  const b = getBook("u:" + out.account.phone);
-  if (!b.profile.name && out.account.name) { b.profile.name = out.account.name; persistBook("u:" + out.account.phone); }
+  const phone = out.account.phone;
+  // L'account esiste solo se è durevole: un token consegnato per un account
+  // solo in RAM funzionerebbe fino al primo riavvio, poi "account sparito".
+  const saved = await persistAccountDurable(phone);
+  if (!saved.ok) { delete accounts[phone]; return res.status(503).json({ error: SAVE_FAIL_VI }); }
+  // il libro nasce col nome dell'account (cosmetico: non blocca la registrazione)
+  if (out.account.name) {
+    mutateBookDurable("u:" + phone, (b) => { if (!b.profile.name) b.profile.name = out.account.name; }).catch(() => {});
+  }
   res.json({ ok: true, token: out.token, account: publicAccount(out.account) });
 });
 
@@ -822,11 +934,16 @@ app.post("/api/link/zalo-code", requireAuth, (req, res) =>
   res.json({ ok: true, code: createLinkCode(req.phone), expiresInMinutes: 15 }));
 
 // hộ → collega il proprio đại lý thuế con il codice invito
-app.post("/api/link-agent", requireAuth, (req, res) => {
+app.post("/api/link-agent", requireAuth, async (req, res) => {
   const agent = findAgentByCode(req.body?.code);
   if (!agent) return res.status(404).json({ error: "Không tìm thấy mã đại lý." });
+  const prev = req.account.agentPhone;
   req.account.agentPhone = agent.phone;
-  persistAccount(req.phone);
+  const saved = await persistAccountDurable(req.phone);
+  if (!saved.ok) {
+    if (prev) req.account.agentPhone = prev; else delete req.account.agentPhone;
+    return res.status(503).json({ error: SAVE_FAIL_VI });
+  }
   res.json({ ok: true, agent: { name: agent.name, phone: agent.phone } });
 });
 
@@ -849,26 +966,52 @@ app.get("/api/claim/preview/:token", rateLimit({ windowMs: 15 * 60_000, max: 30,
 // valida e mai si sovrascrive; registrazione hộ altrimenti) → zaloId collegato
 // → mergeZaloBook (la macchina esistente: migra anche la config Sheets e
 // tocca la coda di push) → il token si consuma. Stesso secchio rate "claim".
-app.post("/api/claim", rateLimit({ windowMs: 15 * 60_000, max: 30, name: "claim" }), (req, res) => {
+app.post("/api/claim", rateLimit({ windowMs: 15 * 60_000, max: 30, name: "claim" }), async (req, res) => {
   const { token: claimToken, phone: rawPhone, pin, name } = req.body || {};
   const v = verifyClaimToken(claimToken, { secret: CLAIM_SECRET, registry: claimRegistry });
   if (v.error) return res.status(CLAIM_ERROR_STATUS[v.error]).json({ error: CLAIM_ERROR_VI[v.error], code: v.error });
   const phone = normalizePhone(rawPhone);
   if (!phone) return res.status(400).json({ error: "Số điện thoại không hợp lệ (VD: 0901234567)." });
-  const out = accounts[phone] ? login({ phone, pin }) : register({ phone, pin, name, role: "ho" });
+  const isNew = !accounts[phone];
+  const out = isNew ? register({ phone, pin, name, role: "ho" }) : login({ phone, pin });
   if (out.error) return res.status(400).json({ error: out.error });
   const acct = out.account;
-  // il libro nasce col nome dell'account, come in /api/auth/register
-  const b = getBook("u:" + phone);
-  if (!b.profile.name && acct.name) { b.profile.name = acct.name; persistBook("u:" + phone); }
+  // ORDINE DUREVOLE, dal meno al più impegnativo: (1) account base su disco,
+  // (2) merge del libro (sotto entrambe le code), (3) collegamento zaloId,
+  // (4) marcatore monouso. Ogni fallimento lascia uno stato da cui il RETRY
+  // dello STESSO link riconverge: finché nessun account porta lo zaloId il
+  // token resta valido (isUsed guarda findAccountByZaloId), e un merge già
+  // fatto al retry è un no-op (moved 0).
+  const acctSaved0 = await persistAccountDurable(phone);
+  if (!acctSaved0.ok) {
+    if (isNew) delete accounts[phone];
+    return res.status(503).json({ error: SAVE_FAIL_VI });
+  }
+  // il libro nasce col nome dell'account (cosmetico, non blocca il claim)
+  if (acct.name) mutateBookDurable("u:" + phone, (b) => { if (!b.profile.name) b.profile.name = acct.name; }).catch(() => {});
+  const merged = await mergeZaloBook(v.zaloId, phone);
+  if (!merged.ok) return res.status(503).json({ error: SAVE_FAIL_VI });
+  // Doppio submit concorrente: entrambi passavano la verifica del token prima
+  // che uno dei due collegasse. Il ricontrollo qui, DOPO il merge (che sotto
+  // le due code è comunque idempotente sul secondo giro: sorgente già rimossa,
+  // moved 0), chiude la finestra con un "used" onesto invece di due account
+  // collegati allo stesso zaloId.
+  if (claimRegistry.isUsed(v.zaloId)) {
+    return res.status(CLAIM_ERROR_STATUS.used).json({ error: CLAIM_ERROR_VI.used, code: "used" });
+  }
+  const prevZalo = acct.zaloId;
   acct.zaloId = v.zaloId;
-  persistAccount(phone);
-  // Monouso: marcato PRIMA del merge (il merge rimuove il libro zalo, e il
-  // marcatore deve arrivare su disco finché il libro esiste). Dopo il merge
-  // il backstop è l'account collegato (claimRegistry.isUsed).
+  const acctSaved = await persistAccountDurable(phone);
+  if (!acctSaved.ok) {
+    // il libro è già fuso (durevole), il collegamento no: scollegata la
+    // memoria, il token resta valido e il retry fa solo merge(0) + link.
+    if (prevZalo) acct.zaloId = prevZalo; else delete acct.zaloId;
+    return res.status(503).json({ error: SAVE_FAIL_VI });
+  }
+  // Backstop già attivo (account collegato durevole); il marcatore sul libro
+  // ormai rimosso resta best-effort per il caso "libro senza voci".
   claimRegistry.markUsed(v.zaloId);
-  const moved = mergeZaloBook(v.zaloId, phone);
-  res.json({ ok: true, token: out.token, account: publicAccount(acct), moved });
+  res.json({ ok: true, token: out.token, account: publicAccount(acct), moved: merged.moved });
 });
 
 // Gancio SOLO test (NODE_ENV=test): l'e2e non può leggere il messaggio Zalo
@@ -878,6 +1021,13 @@ app.post("/api/claim", rateLimit({ windowMs: 15 * 60_000, max: 30, name: "claim"
 if (process.env.NODE_ENV === "test") {
   app.get("/api/claim/test-mint/:zaloId", (req, res) =>
     res.json({ ok: true, token: mintClaimToken(req.params.zaloId, { secret: CLAIM_SECRET, registry: claimRegistry }) }));
+  // Iniezione di guasti di persistenza: i prossimi N persist falliscono.
+  // Serve all'e2e per provare che un persist fallito = 503 + rollback, mai
+  // una conferma. In produzione la rotta non esiste.
+  app.post("/api/test/fail-persist", (req, res) => {
+    _durability.failNext = Math.max(0, Number(req.body?.n ?? 1));
+    res.json({ ok: true, failNext: _durability.failNext });
+  });
 }
 
 // ---- Billing -------------------------------------------------------------------
@@ -888,24 +1038,43 @@ app.post("/api/billing/subscribe", requireAuth, async (req, res) => {
     const baseUrl = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;
     const out = await createPaymentLink({ planKey, phone: req.phone, baseUrl });
     if (out.error) return res.status(502).json({ error: out.error });
+    // pendingOrder DEVE essere durevole prima del redirect: se sopravvive solo
+    // in RAM e il server riavvia, l'utente PAGA e il webhook payOS non trova
+    // più l'ordine — soldi presi, gói mai attivato.
     req.account.pendingOrder = { orderCode: out.orderCode, plan: planKey };
-    persistAccount(req.phone);
+    const saved = await persistAccountDurable(req.phone);
+    if (!saved.ok) { delete req.account.pendingOrder; return res.status(503).json({ error: SAVE_FAIL_VI }); }
     return res.json({ ok: true, mode: "payos", checkoutUrl: out.checkoutUrl });
   }
   // Pilot mode: attivazione founder gratuita (30 giorni), nessun pagamento.
+  const prevSub = { ...req.account.sub };
   const sub = activateSub(req.account, planKey, { pilot: true });
-  persistAccount(req.phone);
+  const saved = await persistAccountDurable(req.phone);
+  if (!saved.ok) { req.account.sub = prevSub; return res.status(503).json({ error: SAVE_FAIL_VI }); }
   res.json({ ok: true, mode: "pilot", sub });
 });
 
-app.post("/webhooks/payos", (req, res) => {
+app.post("/webhooks/payos", async (req, res) => {
   if (!verifyPayosWebhook(req.body)) return res.status(401).json({ error: "bad signature" });
   const data = req.body?.data || {};
   const acct = Object.values(accounts).find((a) => a.pendingOrder?.orderCode === data.orderCode);
   if (acct && (data.code === "00" || req.body.success === true)) {
-    activateSub(acct, acct.pendingOrder.plan, { pilot: false });
+    const order = acct.pendingOrder;
+    const prevSub = { ...acct.sub };
+    activateSub(acct, order.plan, { pilot: false });
     delete acct.pendingOrder;
-    persistAccount(acct.phone);
+    // Un'attivazione PAGATA che vive solo in RAM è un cliente derubato al
+    // prossimo deploy: se il persist fallisce, pendingOrder torna al suo posto
+    // (il retry di payOS deve poter RITROVARE l'ordine) e ANCHE sub torna
+    // indietro — activateSub estende da activeUntil, e senza questo rollback
+    // ogni retry di payOS regalerebbe +30 giorni. Poi 500: payOS ritenta e il
+    // giro riconverge sul persist.
+    const saved = await persistAccountDurable(acct.phone);
+    if (!saved.ok) {
+      acct.pendingOrder = order;
+      acct.sub = prevSub;
+      return res.status(500).json({ error: "persist failed — retry" });
+    }
   }
   res.json({ ok: true });
 });
@@ -973,12 +1142,11 @@ app.get("/api/ledger", (req, res) => res.json(ledgerPayload(uidFor(req))));
 // punteggio la esclude — accettarla dal client falserebbe il Điểm Sổ Sạch.
 const WEB_PROVENANCES = new Set(["manual", "photo", "bank", "pos", "einvoice"]);
 
-app.post("/api/ledger", (req, res) => {
+app.post("/api/ledger", async (req, res) => {
   const uid = uidFor(req);
   const { type, amount, date, counterparty, description, provenance } = req.body || {};
   if (!["thu", "chi"].includes(type) || !Number(amount))
     return res.status(400).json({ error: "type thu|chi e amount richiesti" });
-  const b = getBook(uid);
   const entry = {
     id: "e" + Date.now() + Math.random().toString(36).slice(2, 6),
     type, amount: Math.round(Number(amount)),
@@ -989,34 +1157,38 @@ app.post("/api/ledger", (req, res) => {
     provenance: WEB_PROVENANCES.has(provenance) ? provenance : "manual",
     createdAt: new Date().toISOString(),
   };
-  b.entries.push(entry);
-  persistBook(uid);
+  // Durevole prima del 200: il client mostra "✅ Đã lưu" sulla risposta.
+  const saved = await mutateBookDurable(uid, (b) => { b.entries.push(entry); });
+  if (!saved.ok) return res.status(503).json({ error: SAVE_FAIL_VI });
   sheetsQueue.touch(uid);   // vista Sheets: push dopo la quiete
   res.json({ ok: true, entry });
 });
 
-app.delete("/api/ledger/:id", (req, res) => {
+app.delete("/api/ledger/:id", async (req, res) => {
   const uid = uidFor(req);
-  const b = getBook(uid);
-  const before = b.entries.length;
-  b.entries = b.entries.filter((e) => e.id !== req.params.id);
-  persistBook(uid);
+  const saved = await mutateBookDurable(uid, (b) => {
+    const before = b.entries.length;
+    b.entries = b.entries.filter((e) => e.id !== req.params.id);
+    return before - b.entries.length;
+  });
+  if (!saved.ok) return res.status(503).json({ error: SAVE_FAIL_VI });
   sheetsQueue.touch(uid);   // vista Sheets: push dopo la quiete
-  res.json({ ok: true, removed: before - b.entries.length });
+  res.json({ ok: true, removed: saved.result });
 });
 
-app.post("/api/profile", (req, res) => {
+app.post("/api/profile", async (req, res) => {
   const uid = uidFor(req);
-  const b = getBook(uid);
   const { name, category, revenueEstimate, lang } = req.body || {};
-  if (name !== undefined) b.profile.name = String(name).slice(0, 120);
-  if (category && CATEGORIES[category]) b.profile.category = category;
-  if (revenueEstimate !== undefined) b.profile.revenueEstimate = Math.max(0, Number(revenueEstimate) || 0);
-  // lingua del bot/web: whitelist esplicita, come category — un valore fuori
-  // da "vi"|"en" si ignora in silenzio, mai un 400 per un campo opzionale
-  if (lang !== undefined && ["vi", "en"].includes(lang)) b.profile.lang = lang;
-  persistBook(uid);
-  res.json({ ok: true, profile: publicProfile(b.profile) });
+  const saved = await mutateBookDurable(uid, (b) => {
+    if (name !== undefined) b.profile.name = String(name).slice(0, 120);
+    if (category && CATEGORIES[category]) b.profile.category = category;
+    if (revenueEstimate !== undefined) b.profile.revenueEstimate = Math.max(0, Number(revenueEstimate) || 0);
+    // lingua del bot/web: whitelist esplicita, come category — un valore fuori
+    // da "vi"|"en" si ignora in silenzio, mai un 400 per un campo opzionale
+    if (lang !== undefined && ["vi", "en"].includes(lang)) b.profile.lang = lang;
+  });
+  if (!saved.ok) return res.status(503).json({ error: SAVE_FAIL_VI });
+  res.json({ ok: true, profile: publicProfile(getBook(uid).profile) });
 });
 
 // ---- Google Sheets: config + push manuale -----------------------------------------
@@ -1030,21 +1202,24 @@ app.post("/api/sheets/config", requireAuth, async (req, res) => {
   if (!String(secret || "").trim())
     return res.status(400).json({ error: "Thiếu mã bí mật — đặt SECRET trong Apps Script rồi dán vào đây." });
   const uid = "u:" + req.phone;
-  const b = getBook(uid);
-  b.profile.sheets = { url: v.url, secret: String(secret).trim(), lastPushAt: null, lastPushOk: null };
-  persistBook(uid);
+  // Durevole: un secret solo in RAM sparisce al riavvio e la sync muore muta.
+  const saved = await mutateBookDurable(uid, (b) => {
+    b.profile.sheets = { url: v.url, secret: String(secret).trim(), lastPushAt: null, lastPushOk: null };
+  });
+  if (!saved.ok) return res.status(503).json({ error: SAVE_FAIL_VI });
   // Push di prova IMMEDIATO: URL o secret sbagliati si scoprono ora, non alla
   // prossima ricevuta. 0 retry: l'errore del foglio arriva in chiaro all'utente.
   const push = await sheetsPushNow(uid);
   // Mai il secret nella risposta: publicProfile lo redige.
-  res.json({ ok: true, sheets: publicProfile(b.profile).sheets, push });
+  res.json({ ok: true, sheets: publicProfile(getBook(uid).profile).sheets, push });
 });
 
-app.delete("/api/sheets/config", requireAuth, (req, res) => {
+app.delete("/api/sheets/config", requireAuth, async (req, res) => {
   const uid = "u:" + req.phone;
-  const b = getBook(uid);
-  delete b.profile.sheets;
-  persistBook(uid);
+  // Durevole: un "disconnesso" solo in RAM risorge al riavvio — l'utente
+  // crede di aver revocato la sync e il server continua a spingere.
+  const saved = await mutateBookDurable(uid, (b) => { delete b.profile.sheets; });
+  if (!saved.ok) return res.status(503).json({ error: SAVE_FAIL_VI });
   res.json({ ok: true });
 });
 
@@ -1092,7 +1267,7 @@ app.get("/api/agent/demo", rateLimit({ windowMs: 60_000, max: 30, name: "agentde
 // ---- Danh sách chờ pilot (thay cho mailto) ---------------------------------------
 // Il CTA era un mailto:, che su mobile perde il lead. Qui il contatto entra in
 // Postgres e sopravvive ai redeploy: è la pipeline delle prime 100 hộ.
-app.post("/api/waitlist", rateLimit({ windowMs: 60 * 60_000, max: 8, name: "waitlist" }), (req, res) => {
+app.post("/api/waitlist", rateLimit({ windowMs: 60 * 60_000, max: 8, name: "waitlist" }), async (req, res) => {
   const { name, phone, city, role } = req.body || {};
   const p = normalizePhone(phone);
   if (!p) return res.status(400).json({ error: "Số điện thoại không hợp lệ." });
@@ -1110,7 +1285,12 @@ app.post("/api/waitlist", rateLimit({ windowMs: 60 * 60_000, max: 8, name: "wait
     role: role === "agent" || role === "ho" ? role : (existing?.role || "ho"),
     createdAt: existing?.createdAt || new Date().toISOString(),
   };
-  persistLead(p);
+  // Durevole: i lead sono la pipeline del pilota, non cache.
+  const saved = await persistLeadDurable(p);
+  if (!saved.ok) {
+    if (existing) leads[p] = existing; else delete leads[p];
+    return res.status(503).json({ error: SAVE_FAIL_VI });
+  }
   // la posizione è prova sociale onesta: numero reale, nessun gonfiaggio
   res.json({ ok: true, position: Object.keys(leads).length, already: !!existing });
 });
@@ -1126,40 +1306,54 @@ app.get("/api/waitlist", (req, res) => {
 });
 
 // ---- Sổ mẫu (demo per utenti/investitori — solo sandbox anonime) ------------------
-app.post("/api/demo-seed", (req, res) => {
+app.post("/api/demo-seed", async (req, res) => {
   if (req.phone) return res.status(403).json({ error: "Sổ mẫu chỉ dành cho bản dùng thử (chưa đăng nhập)." });
-  const b = getBook(uidFor(req));
-  b.entries = b.entries.filter((e) => !e.sample); // niente doppioni se ritappato
-  b.entries.push(...sampleEntries());
-  if (!b.profile.name) Object.assign(b.profile, SAMPLE_PROFILE);
-  persistBook(uidFor(req));
-  res.json({ ok: true, added: b.entries.filter((e) => e.sample).length });
+  const saved = await mutateBookDurable(uidFor(req), (b) => {
+    b.entries = b.entries.filter((e) => !e.sample); // niente doppioni se ritappato
+    b.entries.push(...sampleEntries());
+    if (!b.profile.name) Object.assign(b.profile, SAMPLE_PROFILE);
+    return b.entries.filter((e) => e.sample).length;
+  });
+  if (!saved.ok) return res.status(503).json({ error: SAVE_FAIL_VI });
+  res.json({ ok: true, added: saved.result });
 });
 
-app.delete("/api/demo-seed", (req, res) => {
-  const b = getBook(uidFor(req));
-  const before = b.entries.length;
-  b.entries = b.entries.filter((e) => !e.sample);
-  if (b.profile.name === SAMPLE_PROFILE.name) b.profile.name = "";
-  persistBook(uidFor(req));
-  res.json({ ok: true, removed: before - b.entries.length });
+app.delete("/api/demo-seed", async (req, res) => {
+  const saved = await mutateBookDurable(uidFor(req), (b) => {
+    const before = b.entries.length;
+    b.entries = b.entries.filter((e) => !e.sample);
+    if (b.profile.name === SAMPLE_PROFILE.name) b.profile.name = "";
+    return before - b.entries.length;
+  });
+  if (!saved.ok) return res.status(503).json({ error: SAVE_FAIL_VI });
+  res.json({ ok: true, removed: saved.result });
 });
 
 // ---- Export CSV (BOM per Excel, apre pulito con dấu tiếng Việt) -------------------
-app.get("/api/export.csv", (req, res) => {
-  const uid = uidFor(req);
-  const b = getBook(uid);
-  // 7 colonne, IDENTICHE al payload Sheets ("Gốc" = provenance): i due export
-  // devono raccontare lo stesso libro, colonna per colonna.
+// 7 colonne, IDENTICHE al payload Sheets ("Gốc" = provenance): i due export
+// devono raccontare lo stesso libro, colonna per colonna. Condiviso fra
+// l'export dell'hộ e quello per-cliente dell'đại lý thuế.
+function csvOfBook(b) {
+  // I campi liberi arrivano dal CLIENTE (testo Zalo, form web): una cella che
+  // inizia con = + - @ è una FORMULA per Excel, e con l'export per-cliente
+  // dell'đại lý il CSV attraversa un confine di fiducia — un hộ ostile non
+  // deve poter eseguire nulla nel foglio dello studio. L'apostrofo iniziale è
+  // la neutralizzazione standard: Excel lo tratta come marcatore di testo.
+  const safeCell = (v) => (/^[=+\-@\t\r]/.test(String(v)) ? "'" + v : v);
   const rows = [["Ngày", "Loại", "Số tiền (VND)", "Đối tác", "Mô tả", "Nguồn", "Gốc"]];
   for (const e of [...b.entries].sort((a, z) => a.date.localeCompare(z.date))) {
-    rows.push([e.date, e.type === "thu" ? "Thu" : "Chi", e.amount, e.counterparty || "", e.description || "", e.source || "", e.provenance || ""]);
+    rows.push([e.date, e.type === "thu" ? "Thu" : "Chi", e.amount, safeCell(e.counterparty || ""), safeCell(e.description || ""), e.source || "", e.provenance || ""]);
   }
-  const csv = "﻿" + rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  return "﻿" + rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+}
+function sendCsv(res, csv, filename) {
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
-  res.setHeader("Content-Disposition", `attachment; filename="so-sach-${todayVN()}.csv"`);
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.send(csv);
-});
+}
+
+app.get("/api/export.csv", (req, res) =>
+  sendCsv(res, csvOfBook(getBook(uidFor(req))), `so-sach-${todayVN()}.csv`));
 
 // ---- Tờ khai 01/CNKD --------------------------------------------------------------
 app.get("/api/declaration", (req, res) => {
@@ -1178,22 +1372,36 @@ app.get("/api/opening", (req, res) => {
   res.json({ ok: true, year, quarters: openingOf(getBook(uidFor(req)), year) });
 });
 
-app.post("/api/opening", (req, res) => {
+app.post("/api/opening", async (req, res) => {
   const uid = uidFor(req);
-  const b = getBook(uid);
-  const out = applyOpening(b, req.body || {}, todayVN());
+  // applyOpening dentro la mutazione durevole. Un error (anno invalido) esce
+  // PRIMA di toccare il libro, quindi il persist in quel caso è un no-op
+  // innocuo; gli skipped parziali restano la semantica del form web (applica
+  // i trimestri validi, riferisce quelli rifiutati).
+  const saved = await mutateBookDurable(uid, (b) => applyOpening(b, req.body || {}, todayVN()));
+  if (!saved.ok) return res.status(503).json({ error: SAVE_FAIL_VI });
+  const out = saved.result;
   if (out.error) return res.status(400).json({ error: out.error });
-  persistBook(uid);
   sheetsQueue.touch(uid);   // vista Sheets: push dopo la quiete
   res.json({ ok: true, ...out, ledger: ledgerPayload(uid) });
 });
 
 // ---- Đại lý thuế (agent) dashboard -------------------------------------------------
+// Guardia unica: ruolo agent + (per le rotte per-cliente) cliente DEL SUO
+// roster. Il telefono arriva dall'URL, quindi la proprietà si verifica sempre
+// contro agentPhone — mai fidarsi del parametro da solo.
+function agentClientOr404(req, res) {
+  if (req.account.role !== "agent") { res.status(403).json({ error: "Chỉ dành cho đại lý thuế." }); return null; }
+  const phone = normalizePhone(req.params.phone);
+  const client = phone && accounts[phone];
+  if (!client || client.agentPhone !== req.phone) { res.status(404).json({ error: "Không phải khách của bạn." }); return null; }
+  return { phone, client };
+}
+
 app.get("/api/agent/clients", requireAuth, (req, res) => {
   if (req.account.role !== "agent") return res.status(403).json({ error: "Chỉ dành cho đại lý thuế." });
   const now = new Date();
-  const year = now.getFullYear();
-  const { q } = quarterOf(now);
+  const { q, year } = quarterOf(now);   // trimestre VIETNAMITA, non del server
   const clients = Object.values(accounts)
     .filter((a) => a.role === "ho" && a.agentPhone === req.phone)
     .map((a) => {
@@ -1202,23 +1410,64 @@ app.get("/api/agent/clients", requireAuth, (req, res) => {
       const tY = totals(b.entries, { year });
       const projection = projectAnnual(tY.revenue, now);
       const tax = quarterlyTax(tQ.revenue, b.profile.category, projection);
+      const sh = b.profile.sheets;
       return {
         phone: a.phone, name: b.profile.name || a.name || a.phone,
         category: b.profile.category,
         entries: b.entries.length,
+        // L'ultima data di voce dice a colpo d'occhio chi ha smesso di
+        // registrare — il cliente che l'đại lý deve chiamare PRIMA della
+        // scadenza, non il giorno della scadenza.
+        lastEntryAt: b.entries.reduce((m, e) => (String(e.date || "") > m ? e.date : m), "") || null,
         quarterRevenue: tQ.revenue, quarterTax: tax.total, exempt: tax.exempt,
         subActive: subActive(a),
+        zaloLinked: !!a.zaloId,
+        // Diagnostica Sheets SENZA url né secret: all'đại lý serve solo
+        // "collegato e funziona / collegato e rotto / non collegato".
+        sheets: sh ? { connected: !!sh.secret, lastPushOk: sh.lastPushOk ?? null, lastPushAt: sh.lastPushAt || null } : null,
+        score: sosachScore(b, now).grade,
       };
     });
   res.json({ ok: true, agentCode: req.account.agentCode, quarter: `Q${q}/${year}`, clients });
 });
 
 app.get("/api/agent/client/:phone", requireAuth, (req, res) => {
-  if (req.account.role !== "agent") return res.status(403).json({ error: "Chỉ dành cho đại lý thuế." });
-  const phone = normalizePhone(req.params.phone);
-  const client = phone && accounts[phone];
-  if (!client || client.agentPhone !== req.phone) return res.status(404).json({ error: "Không phải khách của bạn." });
-  res.json({ ok: true, client: { phone, name: client.name }, ...ledgerPayload("u:" + phone) });
+  const hit = agentClientOr404(req, res);
+  if (!hit) return;
+  const payload = ledgerPayload("u:" + hit.phone);
+  // publicProfile redige solo il secret; l'URL del foglio resta — e va bene
+  // per il PROPRIETARIO (il form di config lo rimostra), non per l'đại lý:
+  // qui si riduce alla sola diagnostica, come nel roster.
+  if (payload.profile?.sheets) {
+    const { connected, lastPushOk = null, lastPushAt = null } = payload.profile.sheets;
+    payload.profile = { ...payload.profile, sheets: { connected, lastPushOk, lastPushAt } };
+  }
+  res.json({ ok: true, client: { phone: hit.phone, name: hit.client.name, zaloLinked: !!hit.client.zaloId }, ...payload });
+});
+
+// La 01/CNKD di UN cliente, per il trimestre scelto: è il pezzo che rende il
+// roster un piano di lavoro — l'đại lý produce la bozza di tờ khai da qui,
+// senza chiedere al cliente di aprire nulla. Stesso buildDeclaration del
+// libro proprio: mai due implementazioni della stessa dichiarazione.
+app.get("/api/agent/client/:phone/declaration", requireAuth, (req, res) => {
+  const hit = agentClientOr404(req, res);
+  if (!hit) return;
+  const b = getBook("u:" + hit.phone);
+  const d = buildDeclaration(b, { year: req.query.year, q: req.query.q });
+  res.json({
+    ok: true,
+    client: { phone: hit.phone, name: b.profile.name || hit.client.name || hit.phone },
+    // il preparatore è l'đại lý stesso: sulla bozza stampata deve esserci
+    agent: { name: req.account.name || req.phone, phone: req.phone },
+    ...d,
+  });
+});
+
+// CSV del libro di UN cliente: per il software di studio dell'đại lý.
+app.get("/api/agent/client/:phone/export.csv", requireAuth, (req, res) => {
+  const hit = agentClientOr404(req, res);
+  if (!hit) return;
+  sendCsv(res, csvOfBook(getBook("u:" + hit.phone)), `so-sach-${hit.phone}-${todayVN()}.csv`);
 });
 
 app.get("/healthz", (_req, res) => res.json({

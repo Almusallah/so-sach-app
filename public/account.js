@@ -324,6 +324,77 @@ function _json(o) {
   }
 
   // ---- Agent dashboard ----------------------------------------------------------
+  // Il roster è un PIANO DI LAVORO, non una lista: per ogni cliente si vede se
+  // il canale Zalo è collegato, se la sync Sheets gira o è rotta, quando ha
+  // registrato l'ultima voce (chi ha smesso si chiama PRIMA della scadenza) —
+  // e da qui si produce la bozza di 01/CNKD del trimestre scelto.
+  const dmy = (iso) => /^\d{4}-\d{2}-\d{2}$/.test(iso || "") ? iso.slice(8, 10) + "/" + iso.slice(5, 7) : (iso || "");
+  const dmyFull = (iso) => /^\d{4}-\d{2}-\d{2}$/.test(iso || "") ? iso.slice(8, 10) + "/" + iso.slice(5, 7) + "/" + iso.slice(0, 4) : (iso || "");
+
+  // Gli ultimi 4 trimestri (incluso il corrente): a ottobre l'đại lý deposita
+  // il Q3 — il trimestre CHIUSO è il caso d'uso principale, non quello in corso.
+  function lastQuarters(n = 4) {
+    const now = new Date();
+    let y = now.getFullYear(), q = Math.floor(now.getMonth() / 3) + 1;
+    const out = [];
+    for (let i = 0; i < n; i++) { out.push({ y, q }); q--; if (!q) { q = 4; y--; } }
+    return out;
+  }
+
+  async function agentDeclModal(phone) {
+    const qs = lastQuarters();
+    const load = async (y, q) => {
+      const d = await api(`/api/agent/client/${phone}/declaration?year=${y}&q=${q}`);
+      if (!d.ok) return showError("❌ " + (d.error || ""));
+      const pr = (n) => (n * 100).toFixed(1).replace(".0", "");
+      showModal(`
+        <div class="modal-head">📄 ${t("Tờ khai quý — bản nháp", "Quarterly declaration — draft")}</div>
+        <div class="modal-body decl">
+          <h4>${d.form}</h4>
+          <div class="sub">${d.period}</div>
+          <div class="field no-print"><label>${t("Kỳ khai", "Filing period")}</label>
+            <select id="agQSel">${qs.map((o) => `<option value="${o.y}-${o.q}" ${o.y === d.year && o.q === d.quarter ? "selected" : ""}>Q${o.q}/${o.y}</option>`).join("")}</select></div>
+          <table>
+            <tr><td>${t("Ngày lập", "Prepared on")}</td><td>${dmyFull(d.generatedAt)}</td></tr>
+            <tr><td>${t("Người nộp thuế", "Taxpayer")}</td><td><b>${escHtml(d.taxpayer)}</b> (${d.client.phone})</td></tr>
+            <tr><td>${t("Ngành nghề", "Category")}</td><td>${LANG() === "vi" ? d.category.vi : d.category.en}</td></tr>
+            <tr><td>${t("Doanh thu quý", "Quarterly revenue")}</td><td><b>${vnd(d.revenue)}</b></td></tr>
+            <tr><td>${t("Thuế GTGT", "VAT")} ${pr(d.rates.vat)}%</td><td>${vnd(d.vat)}</td></tr>
+            <tr><td>${t("Thuế TNCN", "PIT")} ${pr(d.rates.pit)}%</td><td>${vnd(d.pit)}</td></tr>
+            <tr class="tot"><td>${t("Tổng phải nộp", "Total due")}</td><td>${vnd(d.total)}</td></tr>
+            <tr><td>${t("Hạn nộp", "Deadline")}</td><td><b>${dmyFull(d.deadline)}</b></td></tr>
+            ${d.declaredRevenue ? `<tr><td>${t("Trong đó tự khai", "Of which self-declared")}</td><td>${vnd(d.declaredRevenue)}</td></tr>` : ""}
+          </table>
+          ${d.exempt ? `<div class="conf-note">${d.exemptNote}</div>` : ""}
+          <div class="conf-note">🧑‍💼 ${t("Đại lý thuế lập", "Prepared by tax agent")}: <b>${escHtml(d.agent.name)}</b> (${d.agent.phone})</div>
+          <div class="disc">${d.disclaimer}</div>
+          <div class="share-foot">📒 ${t("Tạo bởi", "Made with")} <b>Sổ Sạch</b> — sosach.com.vn</div>
+          <div style="display:flex;gap:9px;margin-top:14px" class="no-print">
+            <button class="btn solid block" onclick="window.print()">🖨️ ${t("In / Lưu PDF", "Print / Save PDF")}</button>
+            <button class="btn ghost block" id="agDeclClose">${t("Đóng", "Close")}</button>
+          </div>
+        </div>`);
+      $("#agDeclClose").addEventListener("click", closeModal);
+      $("#agQSel").addEventListener("change", (e) => {
+        const [yy, qq] = e.target.value.split("-").map(Number);
+        load(yy, qq);
+      });
+    };
+    const first = qs[0];
+    load(first.y, first.q);
+  }
+
+  // CSV di un cliente, con Bearer (l'header non passa nei link normali).
+  async function downloadClientCsv(phone) {
+    const res = await fetch(`/api/agent/client/${phone}/export.csv`, {
+      headers: { Authorization: "Bearer " + window.SS.getToken() } });
+    if (!res.ok) return showError("❌ CSV: " + res.status);
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `so-sach-${phone}.csv`; a.click(); URL.revokeObjectURL(a.href);
+  }
+
   async function renderAgent() {
     const box = $("#agentBox");
     if (!box) return;
@@ -334,31 +405,56 @@ function _json(o) {
       box.innerHTML = `<div class="empty">${t("Chưa có khách. Gửi mã " + r.agentCode + " cho khách của bạn — họ nhập khi đăng ký.", "No clients yet. Share code " + r.agentCode + " — clients enter it at sign-up.")}</div>`;
       return;
     }
+    // Chip di stato: 💬 Zalo collegato · 📊 Sheets (verde ok / ambra rotto) ·
+    // lettera del Điểm Sổ Sạch. title= per il dettaglio al passaggio.
+    const flags = (c) => {
+      const shTitle = !c.sheets ? t("Chưa kết nối Google Sheets", "Google Sheets not connected")
+        : c.sheets.lastPushOk === false ? t("Sheets: lần đẩy gần nhất LỖI", "Sheets: last push FAILED")
+        : c.sheets.lastPushAt ? t("Sheets: đẩy lần cuối ", "Sheets: last push ") + dmyFull(c.sheets.lastPushAt.slice(0, 10))
+        : t("Sheets: đã kết nối, chưa đẩy", "Sheets: connected, no push yet");
+      return `
+        <span class="flag ${c.zaloLinked ? "on" : "off"}" title="${c.zaloLinked ? t("Đã kết nối Zalo", "Zalo linked") : t("Chưa kết nối Zalo", "Zalo not linked")}">💬</span>
+        <span class="flag ${!c.sheets ? "off" : c.sheets.lastPushOk === false ? "warn" : "on"}" title="${shTitle}">📊</span>
+        <span class="gr g${c.score}" title="${t("Điểm Sổ Sạch", "Sổ Sạch Score")}">${c.score}</span>`;
+    };
     box.innerHTML = `<table>
-      <tr><th>${t("Khách", "Client")}</th><th>${t("Số bút toán", "Entries")}</th><th style="text-align:right">${t("Doanh thu " + r.quarter, "Revenue " + r.quarter)}</th><th style="text-align:right">${t("Thuế ước tính", "Est. tax")}</th><th></th></tr>
+      <tr><th>${t("Khách", "Client")}</th><th>${t("Bút toán", "Entries")}</th><th style="text-align:right">${t("Doanh thu " + r.quarter, "Revenue " + r.quarter)}</th><th style="text-align:right">${t("Thuế ước tính", "Est. tax")}</th><th>${t("Kết nối", "Status")}</th><th></th></tr>
       ${r.clients.map((c) => `
         <tr>
-          <td><b>${c.name}</b><div class="src">${c.phone}${c.subActive ? " · ✅" : ""}</div></td>
-          <td>${c.entries}</td>
+          <td><b>${escHtml(c.name)}</b><div class="src">${c.phone}${c.subActive ? " · ✅" : ""}</div></td>
+          <td>${c.entries}${c.lastEntryAt ? `<div class="src" title="${t("Bút toán gần nhất", "Latest entry")}">${dmy(c.lastEntryAt)}</div>` : ""}</td>
           <td class="amt">${vnd(c.quarterRevenue)}</td>
           <td class="amt">${c.exempt ? t("Miễn", "Exempt") : vnd(c.quarterTax)}</td>
-          <td><button class="btn ghost" data-view="${c.phone}">${t("Xem sổ", "View")}</button></td>
+          <td class="agent-flags">${flags(c)}</td>
+          <td class="agent-actions">
+            <button class="btn ghost" data-view="${c.phone}">${t("Xem sổ", "View")}</button>
+            <button class="btn ghost" data-decl="${c.phone}">📄 ${t("Tờ khai", "Declaration")}</button>
+          </td>
         </tr>`).join("")}
-    </table>`;
+    </table>
+    <div class="src" style="margin-top:8px">💬 Zalo · 📊 Google Sheets · ${t("chữ cái = Điểm Sổ Sạch · ngày dưới số bút toán = lần ghi gần nhất", "letter = Sổ Sạch Score · date under entries = latest entry")}</div>`;
+    box.querySelectorAll("[data-decl]").forEach((b) =>
+      b.addEventListener("click", () => agentDeclModal(b.dataset.decl)));
     box.querySelectorAll("[data-view]").forEach((b) =>
       b.addEventListener("click", async () => {
         const d = await api("/api/agent/client/" + b.dataset.view);
         if (!d.ok) return showError("❌ " + (d.error || ""));
         showModal(`
-          <div class="modal-head">📒 ${d.client.name} — ${d.quarter.label}</div>
+          <div class="modal-head">📒 ${escHtml(d.client.name || "")} — ${d.quarter.label}</div>
           <div class="modal-body">
             <div class="conf-note">${t("Thu", "Income")}: <b>${vnd(d.quarter.revenue)}</b> · ${t("Thuế quý ước tính", "Est. quarterly tax")}: <b>${d.tax.exempt ? t("miễn", "exempt") : vnd(d.tax.total)}</b> · ${t("Hạn", "Due")}: ${d.deadline.deadline}</div>
             <div class="ledger">${d.entries.length ? `<table>
-              ${d.entries.slice(0, 30).map((e) => `<tr class="${e.type}"><td>${e.date}</td><td>${e.counterparty || e.description || ""}</td><td class="amt">${e.type === "thu" ? "+" : "−"}${vnd(e.amount)}</td></tr>`).join("")}
+              ${d.entries.slice(0, 30).map((e) => `<tr class="${e.type}"><td>${e.date}</td><td>${escHtml(e.counterparty || e.description || "")}</td><td class="amt">${e.type === "thu" ? "+" : "−"}${vnd(e.amount)}</td></tr>`).join("")}
             </table>` : `<div class="empty">${t("Sổ trống", "Empty ledger")}</div>`}</div>
-            <button class="btn ghost block" id="dClose2" style="margin-top:12px">${t("Đóng", "Close")}</button>
+            <div style="display:flex;gap:9px;margin-top:12px">
+              <button class="btn ghost block" id="agCsvBtn">📥 CSV</button>
+              <button class="btn ghost block" id="agDeclBtn">📄 ${t("Tờ khai", "Declaration")}</button>
+              <button class="btn ghost block" id="dClose2">${t("Đóng", "Close")}</button>
+            </div>
           </div>`);
         $("#dClose2").addEventListener("click", closeModal);
+        $("#agCsvBtn").addEventListener("click", () => downloadClientCsv(b.dataset.view));
+        $("#agDeclBtn").addEventListener("click", () => agentDeclModal(b.dataset.view));
       }));
   }
 

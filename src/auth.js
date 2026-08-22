@@ -105,16 +105,21 @@ export function createLinkCode(phone) {
   return code;
 }
 
-// Consuma un codice per un dato zaloId. Ritorna il telefono collegato o null.
+// Consuma un codice per un dato zaloId. Ritorna { phone, prevZaloId } o null.
+// SOLO memoria: la persistenza è del chiamante (server.js), che la rende
+// durevole DOPO il merge del libro — se il merge fallisce, il rollback deve
+// poter dire "nulla di durevole è cambiato", e un persist partito da qui lo
+// renderebbe falso. prevZaloId serve al rollback: un account che si ri-collega
+// non deve perdere il collegamento precedente.
 export function consumeLinkCode(code, zaloId) {
   const rec = linkCodes.get(String(code || "").trim().toUpperCase());
   if (!rec || Date.now() > rec.exp) return null;
   linkCodes.delete(String(code).trim().toUpperCase());
   const acct = accounts[rec.phone];
   if (!acct) return null;
+  const prevZaloId = acct.zaloId || null;
   acct.zaloId = zaloId;
-  persistAccount(rec.phone);
-  return rec.phone;
+  return { phone: rec.phone, prevZaloId };
 }
 
 export function findAccountByZaloId(zaloId) {

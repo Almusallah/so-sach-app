@@ -521,6 +521,177 @@ try {
   check("healthz ok dopo gli eventi non-testo", () => assert.equal(health8c.body.ok, true));
   token = savedTok8c;
 
+  // --- 8d. Durabilità: un persist fallito NON diventa mai una conferma -------
+  // Il gancio /api/test/fail-persist fa fallire i prossimi N persist (qualunque
+  // tipo, in ordine di coda): il contratto sotto esame è 503/"chưa lưu được"
+  // + stato INVARIATO, e il retry che riconverge senza doppioni.
+  const armFail = (n) => api("/api/test/fail-persist", { method: "POST", body: JSON.stringify({ n }) });
+
+  // (a) web: POST /api/ledger — 503, il libro non cambia, il retry non doppia
+  const countMine = async () => (await api("/api/ledger")).body.entries.length;
+  const nBefore = await countMine();
+  await armFail(1);
+  const durFail = await api("/api/ledger", { method: "POST", body: JSON.stringify({
+    type: "thu", amount: 777_000, date: "2026-08-21", description: "voce durabilità" }) });
+  check("persist fallito su POST /api/ledger → 503 con messaggio onesto", () => {
+    assert.equal(durFail.status, 503);
+    assert.match(durFail.body.error || "", /Chưa lưu được/);
+  });
+  const nAfterFail = await countMine();
+  check("dopo il 503 il conteggio è invariato", () => assert.equal(nAfterFail, nBefore));
+  const durRetry = await api("/api/ledger", { method: "POST", body: JSON.stringify({
+    type: "thu", amount: 777_000, date: "2026-08-21", description: "voce durabilità" }) });
+  const nAfterRetry = await countMine();
+  check("il retry riesce e NON crea doppioni (una voce sola in più)", () => {
+    assert.equal(durRetry.status, 200);
+    assert.equal(nAfterRetry, nBefore + 1);
+  });
+
+  // (b) Zalo: il bot non conferma una voce non durevole
+  const savedTok8d = token; token = null;
+  const zdBefore = await zCount();                    // ZFIX: 1 voce dalla 8c
+  await armFail(1);
+  await zText("thu 300k"); await settle();
+  const zdAfterFail = await zCount();
+  check("Zalo: persist fallito → nessuna voce nel libro (il bot dice riprova)", () =>
+    assert.equal(zdAfterFail, zdBefore));
+  await zText("thu 300k"); await settle();
+  const zdAfterRetry = await zCount();
+  check("Zalo: il reinvio scrive UNA voce (niente doppioni dal rollback)", () =>
+    assert.equal(zdAfterRetry, zdBefore + 1));
+
+  // (c) claim: l'account esiste solo se durevole. n=2 perché register() accoda
+  // anche il persist legacy prima di quello durevole della rotta.
+  const ZDUR = "zdur" + String(Date.now()).slice(-6);
+  await api("/webhooks/zalo", { method: "POST", body: JSON.stringify({
+    event_name: "user_send_text", sender: { id: ZDUR },
+    message: { text: "thu 1tr", msg_id: "m-dur-1" }, timestamp: Date.now() }) });
+  await settle();
+  const tDur = (await api(`/api/claim/test-mint/${ZDUR}`)).body.token;
+  const durPhone = "0904" + String(Date.now()).slice(-6);
+  await armFail(2);
+  const claimFail = await api("/api/claim", { method: "POST",
+    body: JSON.stringify({ token: tDur, phone: durPhone, pin: "135790", name: "Hộ Durabilità" }) });
+  check("claim con persist fallito → 503, mai un token di sessione", () => {
+    assert.equal(claimFail.status, 503);
+    assert.ok(!claimFail.body.token, "nessuna sessione per un account non durevole");
+  });
+  const ghostLogin = await api("/api/auth/login", { method: "POST",
+    body: JSON.stringify({ phone: durPhone, pin: "135790" }) });
+  check("l'account fantasma NON esiste (rollback completo)", () =>
+    assert.ok(ghostLogin.status >= 400, "login deve fallire, status " + ghostLogin.status));
+  const claimRetry = await api("/api/claim", { method: "POST",
+    body: JSON.stringify({ token: tDur, phone: durPhone, pin: "135790", name: "Hộ Durabilità" }) });
+  check("il claim ritentato con lo STESSO link riesce e fonde il libro", () => {
+    assert.equal(claimRetry.status, 200);
+    assert.equal(claimRetry.body.moved, 1, "la voce Zalo è migrata al retry");
+  });
+
+  // (d) registrazione: la porta d'ingresso non consegna token per account in RAM
+  const regPhone = "0905" + String(Date.now()).slice(-6);
+  await armFail(2);                                   // legacy in register() + durevole
+  const regFail = await api("/api/auth/register", { method: "POST",
+    body: JSON.stringify({ phone: regPhone, pin: "112233", name: "Hộ Reg Durabilità" }) });
+  check("registrazione con persist fallito → 503 senza token", () => {
+    assert.equal(regFail.status, 503);
+    assert.ok(!regFail.body.token);
+  });
+  const regRetry = await api("/api/auth/register", { method: "POST",
+    body: JSON.stringify({ phone: regPhone, pin: "112233", name: "Hộ Reg Durabilità" }) });
+  check("la registrazione ritentata riesce (nessun 'số này đã đăng ký' fantasma)", () =>
+    assert.equal(regRetry.status, 200));
+  token = savedTok8d;
+
+  // --- 8e. Bảng đại lý thuế: roster con stato + tờ khai per cliente ----------
+  // Il roster è un piano di lavoro: per ogni cliente lo stato Zalo/Sheets,
+  // l'ultima voce registrata, il voto — e la 01/CNKD del trimestre scelto
+  // prodotta DALL'đại lý, con l'export CSV del libro del cliente.
+  const savedTok8e = token; token = null;
+
+  // l'đại lý e il suo cliente
+  const agPhone = "0906" + String(Date.now()).slice(-6);
+  const agReg = await api("/api/auth/register", { method: "POST",
+    body: JSON.stringify({ phone: agPhone, pin: "778899", role: "agent", name: "Đại Lý E2E" }) });
+  const agToken = agReg.body.token;
+  const agCode = agReg.body.account?.agentCode;
+  check("registrazione đại lý → codice invito DLxxxx", () =>
+    assert.match(agCode || "", /^DL\d{4}$/));
+
+  const clPhone = "0907" + String(Date.now()).slice(-6);
+  const clReg = await api("/api/auth/register", { method: "POST",
+    body: JSON.stringify({ phone: clPhone, pin: "665544", role: "ho", name: "Hộ Của Đại Lý", agentCode: agCode }) });
+  const clToken = clReg.body.token;
+  token = clToken;
+  await api("/api/ledger", { method: "POST", body: JSON.stringify({
+    type: "thu", amount: 5_000_000, date: "2026-07-15", description: "bán hàng" }) });
+  await api("/api/ledger", { method: "POST", body: JSON.stringify({
+    type: "chi", amount: 1_200_000, date: "2026-08-02", description: "nguyên liệu" }) });
+
+  // il conto principale (con Sheets configurato in sezione 8) entra nel roster
+  token = savedTok8e;
+  const linked = await api("/api/link-agent", { method: "POST", body: JSON.stringify({ code: agCode }) });
+  check("l'hộ si collega all'đại lý col codice invito", () => assert.equal(linked.status, 200));
+
+  token = agToken;
+  const roster = await api("/api/agent/clients");
+  check("il roster elenca i clienti dell'đại lý", () => {
+    assert.equal(roster.status, 200);
+    assert.ok(roster.body.clients.length >= 2, "almeno 2 clienti, ha " + roster.body.clients.length);
+  });
+  const cl = roster.body.clients.find((c) => c.phone === clPhone);
+  const mainCl = roster.body.clients.find((c) => c.phone === phone);
+  check("ogni cliente porta stato Zalo, Sheets, ultima voce e voto", () => {
+    assert.equal(cl.entries, 2);
+    assert.equal(cl.zaloLinked, false);
+    assert.equal(cl.sheets, null, "nessuna config Sheets per il cliente nuovo");
+    assert.equal(cl.lastEntryAt, "2026-08-02", "l'ultima voce per DATA, non per arrivo");
+    assert.ok(["A", "B", "C", "D"].includes(cl.score));
+  });
+  check("il cliente con Sheets configurato lo mostra SENZA url né secret", () => {
+    assert.equal(mainCl.sheets?.connected, true);
+    assert.ok(!("url" in (mainCl.sheets || {})), "mai l'url nel roster");
+    assert.ok(!JSON.stringify(mainCl).includes("sekret-e2e"));
+  });
+
+  // la tờ khai del cliente, trimestre scelto dall'đại lý
+  const agDecl = await api(`/api/agent/client/${clPhone}/declaration?year=2026&q=3`);
+  check("l'đại lý produce la 01/CNKD del cliente (Q3/2026)", () => {
+    assert.equal(agDecl.status, 200);
+    assert.match(agDecl.body.form, /01\/CNKD/);
+    assert.equal(agDecl.body.revenue, 5_000_000, "la voce thu del 15/07 è nel Q3");
+    assert.equal(agDecl.body.taxpayer, "Hộ Của Đại Lý");
+    assert.equal(agDecl.body.agent?.name, "Đại Lý E2E", "il preparatore è l'đại lý");
+  });
+  const agDeclQ1 = await api(`/api/agent/client/${clPhone}/declaration?year=2026&q=1`);
+  check("trimestre senza voci → dichiarazione a zero, non un errore", () => {
+    assert.equal(agDeclQ1.status, 200);
+    assert.equal(agDeclQ1.body.revenue, 0);
+  });
+
+  // CSV del libro del cliente
+  const agCsv = await api(`/api/agent/client/${clPhone}/export.csv`);
+  check("CSV del cliente: 7 colonne e le sue voci", () => {
+    assert.equal(agCsv.status, 200);
+    assert.match(String(agCsv.body), /Ngày.*Gốc/);
+    assert.match(String(agCsv.body), /5000000/);
+  });
+
+  // confini: un ALTRO đại lý non vede questo cliente; un hộ non è un đại lý
+  const ag2Phone = "0908" + String(Date.now()).slice(-6);
+  const ag2 = await api("/api/auth/register", { method: "POST",
+    body: JSON.stringify({ phone: ag2Phone, pin: "998877", role: "agent", name: "Đại Lý Estraneo" }) });
+  token = ag2.body.token;
+  const foreign = await api(`/api/agent/client/${clPhone}/declaration`);
+  const foreignCsv = await api(`/api/agent/client/${clPhone}/export.csv`);
+  check("il cliente di un altro đại lý → 404 (dichiarazione E csv)", () => {
+    assert.equal(foreign.status, 404);
+    assert.equal(foreignCsv.status, 404);
+  });
+  token = clToken;
+  const notAgent = await api("/api/agent/clients");
+  check("un hộ che chiama le rotte đại lý → 403", () => assert.equal(notAgent.status, 403));
+  token = savedTok8e;
+
   // --- 9. Il secret non esce MAI --------------------------------------------
   // Il setaccio finale: il secret viaggia SOLO nel corpo della POST di config
   // (client → server) e nei push verso il foglio. In nessuna risposta, in

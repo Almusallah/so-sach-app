@@ -420,8 +420,9 @@ footer a { color: var(--giada); font-weight: 600; }
   body { background: var(--bianco); }
   .modal-bg { position: static !important; display: block !important; background: none; padding: 0; }
   .modal { box-shadow: none; max-width: none; animation: none; border-radius: 0; }
-  /* I bottoni non hanno senso su carta e finivano stampati sotto il totale. */
-  .modal .btn, .toast, #dClose { display: none !important; }
+  /* I bottoni non hanno senso su carta e finivano stampati sotto il totale.
+     .no-print copre i controlli del modal đại lý (select del trimestre). */
+  .modal .btn, .toast, #dClose, .no-print { display: none !important; }
   /* I browser non stampano gli sfondi: l'intestazione deve reggere in bianco.
      Inchiostro var(--testo): resta monocromatica anche a colori. */
   .modal-head { background: none !important; color: var(--testo); border-bottom: 2px solid var(--testo); }
@@ -435,6 +436,22 @@ footer a { color: var(--giada); font-weight: 600; }
 .op-table td:first-child{white-space:nowrap;font-size:.92rem}
 .op-table input{width:100%;padding:8px 10px;border:1px solid var(--bordo);border-radius:10px;font:inherit;text-align:right}
 .op-table .muted{color:var(--grigio);font-weight:400;font-size:.8rem}
+
+/* ---- bảng đại lý thuế: chip di stato per cliente ----
+   💬 Zalo / 📊 Sheets: spenta (grigia) di default, piena quando il canale è
+   vivo, ambra quando l'ultimo push Sheets è FALLITO — il roster deve dire a
+   colpo d'occhio chi va richiamato, senza aprire nessun modal. */
+.agent-flags { white-space: nowrap; }
+.agent-flags .flag {
+  display: inline-block; font-size: 15px; line-height: 1;
+  padding: 3px 5px; border-radius: 8px; margin-right: 2px;
+}
+.agent-flags .flag.off  { filter: grayscale(1); opacity: .34; }
+.agent-flags .flag.on   { background: var(--giada-wash); }
+.agent-flags .flag.warn { background: var(--oro-wash); }
+.agent-flags .gr { margin-left: 4px; }
+.agent-actions { white-space: nowrap; }
+.agent-actions .btn { padding: 6px 10px; font-size: .82rem; margin: 2px 0; }
 
 /* ---- account layer (near-final) ---- */
 .hidden{display:none!important}
