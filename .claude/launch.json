@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "so-sach-web",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["PORT=3542", "node", "server.js"],
+      "port": 3542
+    }
+  ]
+}

@@ -14,7 +14,7 @@ import {
   thresholdStatus, quarterOf, nextDeadline, partsOf,
 } from "./src/tax.js";
 import { extractReceipt, extractionMode } from "./src/extract.js";
-import { zaloEnabled, verifyWebhook, sendText, fetchImageBase64, formatEntryMessage, formatQuarterMessage, formatYearMessage, formatLowConfidenceMessage, tokenStatus, vnDate } from "./src/zalo.js";
+import { zaloEnabled, verifyWebhook, webhookSecretStatus, sendText, fetchImageBase64, formatEntryMessage, formatQuarterMessage, formatYearMessage, formatLowConfidenceMessage, tokenStatus, vnDate } from "./src/zalo.js";
 import { matchCommand, matchCommandFuzzy, matchLangCommand, normalize, menuText, parseKhaiCommand } from "./src/commands.js";
 import { makePendingStore } from "./src/pending.js";
 import { buildDeclaration } from "./src/declaration.js";
@@ -29,7 +29,7 @@ import { applyOpening, openingOf, declaredRevenue, latestCorrectable } from "./s
 import { sampleEntries, SAMPLE_PROFILE } from "./src/sample.js";
 import { demoAgency } from "./src/demo_agency.js";
 import { validateSheetsUrl, buildSheetsPayload, makePushQueue, pushToSheet } from "./src/sheets.js";
-import { mintClaimToken, verifyClaimToken, claimPromptFor, claimReminderLine } from "./src/claim.js";
+import { mintClaimToken, verifyClaimToken, claimPromptFor, claimReminderLine, makeClaimLinkSource } from "./src/claim.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -178,9 +178,15 @@ const claimRegistry = {
 };
 
 // Ogni link coniato registra il proprio hash: UN token per uid alla volta,
-// rigenerare invalida il precedente (spec, Guardie).
-const claimLinkFor = (zaloId) =>
-  PUBLIC_ORIGIN + "/claim/" + mintClaimToken(zaloId, { secret: CLAIM_SECRET, registry: claimRegistry });
+// rigenerare invalida il precedente (spec, Guardie). Ma il link si RIUSA
+// finché è vivo: prima di questa factory ogni «menu» e ogni testo sconosciuto
+// coniava (e quindi ruotava) il token, uccidendo il link della CTA appena
+// l'utente scriveva qualunque cosa non riconosciuta — il tocco di conversione
+// più prezioso moriva in mano all'utente. Si conia solo se assente/scaduto/
+// superato/consumato (vedi makeClaimLinkSource in src/claim.js).
+const claimLinkFor = makeClaimLinkSource({
+  secret: CLAIM_SECRET, registry: claimRegistry, origin: PUBLIC_ORIGIN,
+});
 
 // CTA una-tantum in coda alla PRIMA conferma di scrittura di un uid NON
 // collegato (flag claimPromptedAt sul libro — la decisione vive in
@@ -224,6 +230,14 @@ const EVENT_TTL_MS = 10 * 60 * 1000;
 // la voce NON è nel libro finché l'utente non conferma. In memoria per scelta,
 // come seenEvents — vedi src/pending.js per la semantica di scarto.
 const pendingPhotos = makePendingStore();
+
+// Conferme di CANCELLAZIONE in sospeso ("sửa" ora chiede prima di toccare il
+// registro: un typo o un fuzzy non devono più poter cancellare una voce
+// fiscale senza un "1" esplicito). Store SEPARATO dalle foto — namespace
+// diversi, così un "1" non può mai confermare la cosa sbagliata — e in più i
+// due rami si escludono a vicenda: una nuova foto scarta la cancellazione in
+// sospeso, e un "sửa" arriva sempre DOPO che lo step 0 ha consumato la foto.
+const pendingDeletes = makePendingStore();
 function alreadyHandled(key) {
   if (!key) return false;                       // senza id non possiamo dedurre: meglio processare
   const now = Date.now();
@@ -244,7 +258,15 @@ app.post("/webhooks/zalo", express.raw({ type: "*/*", limit: "1mb" }), (req, res
   console.log(`zalo webhook ← ${event?.event_name || "(no event_name)"} ` +
               `sender=${event?.sender?.id || "-"} sig=${mac ? "present" : "absent"}`);
   const check = verifyWebhook(raw, event.timestamp, mac);
-  if (!check.ok && zaloEnabled()) return res.status(401).json({ error: "invalid signature" });
+  // Fail-CLOSED: prima la firma si esigeva solo con la catena token OA viva
+  // (zaloEnabled) — con la SOLA chiave di firma configurata i webhook falsi
+  // passavano. Ora basta UNA delle due configurazioni per rifiutare una firma
+  // che non torna. NODE_ENV=test resta permissivo: l'e2e posta eventi non
+  // firmati, e deve continuare a farlo anche se la shell di chi lo lancia ha
+  // le env Zalo vere esportate.
+  const enforceSig = process.env.NODE_ENV !== "test"
+    && (zaloEnabled() || webhookSecretStatus().configured);
+  if (!check.ok && enforceSig) return res.status(401).json({ error: "invalid signature" });
 
   // ACK SUBITO, poi lavora. Leggere l'immagine e chiamare Claude vision prende
   // secondi; se l'ACK aspettasse la fine, Zalo considererebbe l'endpoint lento
@@ -278,7 +300,10 @@ async function handleZaloEvent(event) {
       const lang = books[bookUid]?.profile?.lang || "vi";
       // Una nuova foto scarta qualunque proposta rimasta in sospeso: se
       // restasse viva, un "1" tardivo salverebbe la voce VECCHIA sbagliata.
+      // Idem per una cancellazione in attesa di conferma: il "1" dopo una foto
+      // deve poter confermare SOLO la foto.
       pendingPhotos.take(uid);
+      pendingDeletes.take(uid);
       // Zalo consegna i dati utente COMPLETI solo a IP vietnamiti (policy dal
       // 29/02/2024, confermata dal BQT il 03/08/2026). I campi elencati sono di
       // profilo — che non usiamo — ma se anche l'URL dell'allegato venisse
@@ -337,6 +362,39 @@ async function handleZaloEvent(event) {
       const rawText = (event?.message?.text || "").trim();
       const bookUid = zaloBookUid(uid); // account collegato o libro Zalo
       const lang = books[bookUid]?.profile?.lang || "vi";
+
+      // -1) Cancellazione in attesa di conferma ("sửa" ha chiesto, si aspetta
+      //     un "1"): si consuma A OGNI messaggio, come le foto. Solo "1" entro
+      //     il TTL cancella; qualunque altro testo annulla IN SILENZIO e
+      //     prosegue nel router — mai un messaggio in più da spiegare.
+      const pendingDelete = pendingDeletes.take(uid);
+      if (pendingDelete && normalize(rawText) === "1") {
+        const b = getBook(bookUid);
+        const idx = b.entries.findIndex((e) => e.id === pendingDelete.entryId);
+        if (idx === -1) {
+          // cancellata nel frattempo (web, altro dispositivo): niente da fare
+          await sendText(uid, lang === "en"
+            ? "That entry is no longer in the book — nothing to delete."
+            : "Bút toán đó không còn trong sổ nữa — không có gì để xoá.");
+          return;
+        }
+        const gone = b.entries.splice(idx, 1)[0];
+        persistBook(bookUid);
+        sheetsQueue.touch(bookUid);   // vista Sheets: push dopo la quiete
+        const vnd = (n) => Number(n || 0).toLocaleString("vi-VN") + "đ";
+        await sendText(uid, lang === "en"
+          ? `🗑️ Deleted the latest entry:\n` +
+            `${gone.type === "thu" ? "📈 IN" : "📉 OUT"} ${vnd(gone.amount)}\n` +
+            (gone.counterparty ? `${gone.counterparty}\n` : "") +
+            `Date: ${vnDate(gone.date)}\n\n` +
+            `Send the receipt photo again or type the correct amount.`
+          : `🗑️ Đã xoá bút toán gần nhất:\n` +
+            `${gone.type === "thu" ? "📈 THU" : "📉 CHI"} ${vnd(gone.amount)}\n` +
+            (gone.counterparty ? `${gone.counterparty}\n` : "") +
+            `Ngày: ${vnDate(gone.date)}\n\n` +
+            `Bạn gửi lại ảnh hoá đơn hoặc gõ lại số tiền đúng nhé.`);
+        return;
+      }
 
       // 0) Proposta foto in sospeso: si consuma A OGNI messaggio (take rimuove
       //    sempre, scaduta o no). Solo "1" salva; "2"/"3" ricevono l'aiuto che
@@ -427,28 +485,33 @@ async function handleZaloEvent(event) {
             : `Sổ của bạn chỉ có số liệu tự khai, không có bút toán nào để sửa.\n` +
               `Muốn chỉnh số tự khai, gõ "khai" để xem cách khai lại.`);
         } else {
-          const gone = b.entries.splice(i, 1)[0];
-          persistBook(bookUid);
-          sheetsQueue.touch(bookUid);   // vista Sheets: push dopo la quiete
+          // NIENTE cancellazione immediata: "sửa" mostra la voce che toccherà
+          // e aspetta un "1" esplicito (pendingDeletes, TTL 10 min). Prima un
+          // typo instradato qui cancellava una voce FISCALE senza appello —
+          // la conferma costa un messaggio, il ripristino costava una foto
+          // che magari non esiste più.
+          const target = b.entries[i];
+          pendingDeletes.put(uid, { entryId: target.id });
           const vnd = (n) => Number(n || 0).toLocaleString("vi-VN") + "đ";
           await sendText(uid, lang === "en"
-            ? `🗑️ Deleted the latest entry:\n` +
-              `${gone.type === "thu" ? "📈 IN" : "📉 OUT"} ${vnd(gone.amount)}\n` +
-              (gone.counterparty ? `${gone.counterparty}\n` : "") +
-              `Date: ${vnDate(gone.date)}\n\n` +
-              `Send the receipt photo again or type the correct amount.`
-            : `🗑️ Đã xoá bút toán gần nhất:\n` +
-              `${gone.type === "thu" ? "📈 THU" : "📉 CHI"} ${vnd(gone.amount)}\n` +
-              (gone.counterparty ? `${gone.counterparty}\n` : "") +
-              `Ngày: ${vnDate(gone.date)}\n\n` +
-              `Bạn gửi lại ảnh hoá đơn hoặc gõ lại số tiền đúng nhé.`);
+            ? `Delete this latest entry?\n` +
+              `${target.type === "thu" ? "📈 IN" : "📉 OUT"} ${vnd(target.amount)}\n` +
+              (target.counterparty ? `${target.counterparty}\n` : "") +
+              `Date: ${vnDate(target.date)}\n\n` +
+              `Reply "1" to delete — ignore this message to keep it.`
+            : `Bạn muốn xoá bút toán gần nhất này?\n` +
+              `${target.type === "thu" ? "📈 THU" : "📉 CHI"} ${vnd(target.amount)}\n` +
+              (target.counterparty ? `${target.counterparty}\n` : "") +
+              `Ngày: ${vnDate(target.date)}\n\n` +
+              `Trả lời "1" để xoá, bỏ qua nếu không.`);
         }
       } else if (khai || cmd === "khai") {
         // ⚠️ ORDINE: PRIMA di parseMoneyCommand. "khai quý 1 thu 360tr"
         // contiene "thu <importo>" e il parser dei soldi lo registrerebbe come
         // incasso di OGGI — l'esatto contrario di un saldo di apertura.
-        // `cmd === "khai"` copre il typo fuzzy sulla parola nuda ("khaii") →
-        // help. Le risposte restano IN VIETNAMITA anche col profilo in inglese:
+        // `cmd === "khai"` arriva solo dal match ESATTO: dal 22/08 il fuzzy
+        // non instrada più verso khai (FUZZY_SAFE in commands.js) — "khaii"
+        // riceve il menu. Le risposte restano IN VIETNAMITA anche col profilo in inglese:
         // khai è sintassi fiscale vietnamita per scelta (vedi commands.js) e
         // chi la digita sta già operando in vietnamita.
         const k = khai || { help: true };
@@ -529,7 +592,25 @@ async function handleZaloEvent(event) {
         // Il totale di fine giornata scritto a mano: la via principale per il
         // FATTURATO di un quán, dove le foto funzionano solo per le spese.
         const vnd = (n) => n.toLocaleString("vi-VN") + "đ";
-        if (money.needsType) {
+        if (money.needsAmount) {
+          // Prefisso THU/CHI riconosciuto ma importo illeggibile (o "xị",
+          // ambiguo per regione — vedi src/amount.js): domanda MIRATA, non il
+          // muro-menu che suona come «non ti ho capito».
+          const T = money.type === "thu";
+          if (money.ambiguousUnit) {
+            await sendText(uid, lang === "en"
+              ? `🤔 "xị" means different amounts in different regions (10 nghìn or 100 nghìn), so I won't guess in your tax book — ` +
+                `please type the exact number, e.g. "${money.type} 20k" or "${money.type} 200k".`
+              : `🤔 Mỗi vùng hiểu "xị" khác nhau (10 nghìn hay 100 nghìn) nên mình không dám đoán trong sổ thuế — ` +
+                `bạn gõ số cụ thể giúp mình nhé, vd: ${money.type} 20k hoặc ${money.type} 200k.`);
+          } else {
+            await sendText(uid, lang === "en"
+              ? `🤔 Looks like you want to record ${T ? "IN (thu)" : "OUT (chi)"} but I couldn't read the amount — ` +
+                `e.g. ${money.type} 2tr4, ${money.type} 500k.`
+              : `🤔 Mình thấy bạn muốn ghi ${T ? "THU" : "CHI"} nhưng chưa đọc được số tiền — ` +
+                `vd: ${money.type} 2tr4, ${money.type} 500k.`);
+          }
+        } else if (money.needsType) {
           // Non si indovina: per un quán sarebbe quasi sempre incasso, ma
           // "quasi sempre" in un registro fiscale è una voce sbagliata che
           // sembra giusta. Una domanda costa un messaggio.
@@ -545,9 +626,12 @@ async function handleZaloEvent(event) {
             id: "e" + Date.now(),
             type: money.type,
             amount: money.amount,
-            date: todayVN(),
+            // "hôm qua"/"hôm kia" → ieri/l'altro ieri VIETNAMITI (parser)
+            date: money.date || todayVN(),
             counterparty: money.type === "thu" ? "Khách lẻ" : "",
-            description: money.type === "thu" ? "Tổng bán trong ngày" : "Ghi tay",
+            // la coda libera del comando ("thu 2tr4 cà phê") è la descrizione
+            description: money.description
+              || (money.type === "thu" ? "Tổng bán trong ngày" : "Ghi tay"),
             source: "zalo",
             provenance: "manual",
             createdAt: new Date().toISOString(),
@@ -565,6 +649,31 @@ async function handleZaloEvent(event) {
         // condizione — mai una variante in più da tenere allineata).
         await sendText(uid, menuText({ linked: !!findAccountByZaloId(uid), lang }) + claimReminderFor(uid, lang));
       }
+    } else if (String(event.event_name || "").startsWith("user_send") && event?.sender?.id) {
+      // RAMO DI DEFAULT (prima non c'era): vocale, file, video, contatto… —
+      // tutto ciò che un UTENTE manda e il bot non sa leggere. Il silenzio qui
+      // era il guasto peggiore del prodotto: indistinguibile da un bot morto,
+      // davanti a chiunque provi il vocale come prima cosa. Si risponde SOLO
+      // agli eventi user_send_* con un sender.id — mai a ricevute di consegna,
+      // seen, follow o altri eventi di piattaforma (quelli cadono nell'else
+      // sotto, in silenzio): rispondere a una ricevuta creerebbe un loop di
+      // messaggi non richiesti.
+      const SILENT_USER_EVENTS = new Set(["user_send_sticker", "user_send_gif"]);
+      if (SILENT_USER_EVENTS.has(event.event_name)) {
+        // Sticker/GIF sono un gesto, non un contenuto da leggere: ack muto.
+        console.debug(`zalo: ${event.event_name} da ${uid} — ack silenzioso`);
+        return;
+      }
+      const bookUid = zaloBookUid(uid);
+      const lang = books[bookUid]?.profile?.lang || "vi";
+      await sendText(uid, lang === "en"
+        ? "🎤 I can't listen to or read this file yet — please send a photo of the receipt, or type the amount (e.g. thu 2tr4)."
+        : "🎤 Mình chưa nghe/đọc được tệp này — bạn chụp hoá đơn hoặc gõ số tiền nhé (vd: thu 2tr4).");
+    } else {
+      // Eventi non-utente (ricevute, seen, follow — il benvenuto del follow
+      // vive nell'OA Manager, vedi il commento in testa): MAI una risposta,
+      // solo una riga a livello debug per la diagnosi.
+      console.debug(`zalo: evento ignorato ${event?.event_name || "(no event_name)"}`);
     }
   } catch (e) { console.error("zalo webhook:", e.message); }
 }
@@ -856,9 +965,17 @@ function ledgerPayload(uid) {
 
 app.get("/api/ledger", (req, res) => res.json(ledgerPayload(uidFor(req))));
 
+// Provenienze ammesse dal client web (stesso vocabolario delle voci Zalo:
+// manual | photo | bank | pos | einvoice). Tutto il resto — compreso il campo
+// assente — ricade su "manual": la colonna "Gốc" di CSV e Sheets non deve
+// più uscire vuota per una voce scritta a mano sul sito. MAI "declared" da
+// qui: quella provenienza è riservata alle aperture (src/opening.js) e il
+// punteggio la esclude — accettarla dal client falserebbe il Điểm Sổ Sạch.
+const WEB_PROVENANCES = new Set(["manual", "photo", "bank", "pos", "einvoice"]);
+
 app.post("/api/ledger", (req, res) => {
   const uid = uidFor(req);
-  const { type, amount, date, counterparty, description } = req.body || {};
+  const { type, amount, date, counterparty, description, provenance } = req.body || {};
   if (!["thu", "chi"].includes(type) || !Number(amount))
     return res.status(400).json({ error: "type thu|chi e amount richiesti" });
   const b = getBook(uid);
@@ -868,7 +985,9 @@ app.post("/api/ledger", (req, res) => {
     date: date || todayVN(),
     counterparty: String(counterparty || "").slice(0, 120),
     description: String(description || "").slice(0, 200),
-    source: "web", createdAt: new Date().toISOString(),
+    source: "web",
+    provenance: WEB_PROVENANCES.has(provenance) ? provenance : "manual",
+    createdAt: new Date().toISOString(),
   };
   b.entries.push(entry);
   persistBook(uid);

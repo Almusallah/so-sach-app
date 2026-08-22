@@ -192,6 +192,22 @@ def build(lang, out):
          "nothing to prepare, only something to check." if E
          else "<b>La dichiarazione è un sottoprodotto.</b> Il modulo 01/CNKD si redige in continuo; a fine trimestre "
               "non c'è nulla da preparare, solo qualcosa da controllare."),
+        # Le capacità di questa settimana, dentro il ciclo di prodotto: strato
+        # bilingue + comandi tolleranti (con stop-list di sicurezza), e la
+        # coppia claim-link / Google Sheets (ritenzione + sovranità dei dati).
+        ("<b>It answers in the household's language and forgives typing.</b> Vietnamese first, English on request; "
+         "commands tolerate one-letter slips, behind a stop-list that keeps everyday words away from anything "
+         "destructive." if E
+         else "<b>Risponde nella lingua dell'impresa e perdona la tastiera.</b> Vietnamita prima, inglese a "
+              "richiesta; i comandi tollerano refusi di una lettera, dietro una stop-list che tiene le parole "
+              "comuni lontane da qualsiasi azione distruttiva."),
+        ("<b>The book is never trapped in the chat.</b> A one-time claim link turns the Zalo trial into a web "
+         "account with the history intact, and the ledger mirrors into a Google Sheet the household itself owns — "
+         "its account, its webhook, no credentials of ours near the data." if E
+         else "<b>Il libro non resta mai prigioniero della chat.</b> Un link di rivendicazione monouso trasforma la "
+              "prova su Zalo in un account web con la storia intatta, e il libro si rispecchia in un Google Sheet "
+              "di proprietà dell'impresa — il suo account, il suo webhook, nessuna nostra credenziale vicino ai "
+              "dati."),
     ], px, H - 52 * mm, pw, style=st_small)
     page(3)
 
@@ -263,9 +279,21 @@ def build(lang, out):
                  "None of these ever reached a household." if E
                  else "Nessuno di questi ha mai raggiunto un'impresa.")
     c.setFont("AV", 10); c.setFillColor(GREY)
+    # conteggio test MISURATO (npm test, 2026-08-22 sera, post-audit): 111 —
+    # "e in crescita" perché la suite si allunga a ogni difetto trovato.
+    # ⚠️ Rigenerando il deck: rieseguire npm test e aggiornare QUESTO numero.
     c.drawString(MARG, y - 15 * mm,
-                 "All five were found by tests written before the pilot — 72 of them, run across four timezones on every change." if E
-                 else "Tutti e cinque trovati da test scritti prima del pilota — 72, eseguiti su quattro fusi orari a ogni modifica.")
+                 "All five were found by tests written before the pilot — 111 of them and counting, run across four timezones on every change." if E
+                 else "Tutti e cinque trovati da test scritti prima del pilota — 111 e in crescita, eseguiti su quattro fusi orari a ogni modifica.")
+    # La valuta di conformità: la stessa disciplina applicata alla legge stessa.
+    # Riga stretta ai margini con lo stesso shrink-loop dei titoli.
+    lw_line = ("The same discipline now watches the law itself: citations verified weekly against primary sources — it caught its first drift on day one." if E
+               else "La stessa disciplina ora sorveglia la legge: citazioni verificate ogni settimana sulle fonti primarie — la prima deriva colta il primo giorno.")
+    fs_lw = 10.0
+    while pdfmetrics.stringWidth(lw_line, "AV", fs_lw) > W - 2 * MARG:
+        fs_lw -= 0.25
+    c.setFont("AV", fs_lw)
+    c.drawString(MARG, y - 21 * mm, lw_line)
     page(5)
 
     # ---------------- 6 · MERCATO ----------------
@@ -335,6 +363,14 @@ def build(lang, out):
          "times a year, and we hold the book they need." if E
          else "<b>Le scadenze trimestrali sono un contrappeso al churn.</b> Un utente perso ha un motivo legale per "
               "tornare quattro volte l'anno, e il libro che gli serve lo abbiamo noi."),
+        # La storia di ritenzione del claim link: la conversione è nel prodotto,
+        # non nel marketing — la prova chat diventa un cliente durevole.
+        ("<b>The first entry carries its own conversion.</b> A one-time claim link turns the Zalo trial into a web "
+         "account with the book intact — the path from a chat message to a durable customer is built into the "
+         "product, not bought with marketing." if E
+         else "<b>La prima voce porta con sé la propria conversione.</b> Un link di rivendicazione monouso "
+              "trasforma la prova su Zalo in un account web con il libro intatto — la strada da un messaggio in "
+              "chat a un cliente durevole sta nel prodotto, non si compra col marketing."),
     ], MARG, y2 - 8 * mm, W - 2 * MARG, style=st_small)
     page(7)
 
@@ -459,6 +495,14 @@ def build(lang, out):
          else "<b>La tesi strategica.</b> A 40.000 imprese il portafoglio è un registro strutturato e pesato per "
               "provenienza di come commercia davvero la micro-impresa vietnamita — l'input che oggi una banca o un "
               "fondo di credito non può comprare a nessun prezzo, perché nessuno lo raccoglie così."),
+        # Sovranità dei dati: il mirror Google Sheets è dell'impresa, non nostro.
+        # Un asset dati vale solo se chi lo genera può portarselo via.
+        ("<b>The household owns a live copy.</b> The book mirrors into a Google Sheet the household itself creates — "
+         "its account, its webhook, no credentials of ours near the data. An asset a business can walk away with is "
+         "the one it trusts us to keep." if E
+         else "<b>L'impresa possiede una copia viva.</b> Il libro si rispecchia in un Google Sheet creato "
+              "dall'impresa stessa — il suo account, il suo webhook, nessuna nostra credenziale vicino ai dati. "
+              "L'asset di cui ci si fida è quello che l'impresa può portarsi via."),
     ], MARG, y - 8 * mm, W - 2 * MARG, style=st_small)
     page(10)
 
@@ -580,8 +624,12 @@ def build(lang, out):
     ], H - 56 * mm, big=17)
     y = table(c, [
         [("When" if E else "Quando"), "Milestone", ("Proof we will show you" if E else "Prova che vi mostreremo")],
-        [("Now" if E else "Ora"), ("Product live end-to-end: Zalo bot, ledger, score, declaration, agent dashboard, billing rails" if E
-                                   else "Prodotto live end-to-end: bot Zalo, libro, punteggio, dichiarazione, cruscotto agenti, incassi"),
+        # La riga "Ora" elenca anche le capacità di questa settimana: bot
+        # bilingue, mirror Sheets, claim link, sorveglianza normativa settimanale.
+        [("Now" if E else "Ora"), ("Product live end-to-end: bilingual Zalo bot, ledger, score, declaration, agent dashboard, billing "
+                                   "rails, Google Sheets mirror, Zalo-to-web claim link, weekly legal watch" if E
+                                   else "Prodotto live end-to-end: bot Zalo bilingue, libro, punteggio, dichiarazione, cruscotto agenti, "
+                                        "incassi, specchio Google Sheets, link di rivendicazione Zalo-web, sorveglianza normativa settimanale"),
          "sosach.com.vn"],
         ["Q4 2026", ("100-household PAID pilot, two HCMC districts, via 3–5 licensed tax agents" if E
                      else "Pilota PAGANTE da 100 imprese, due distretti HCMC, via 3–5 đại lý thuế abilitati"),

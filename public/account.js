@@ -4,7 +4,7 @@
 //  closeModal, vnd } esposti da app.js.
 // ============================================================================
 (() => {
-  const { api, refresh, toast, showModal, closeModal, vnd, T } = window.SS;
+  const { api, refresh, toast, showModal, closeModal, vnd, T, showError, hideError } = window.SS;
   const $ = (s, r = document) => r.querySelector(s);
   const LANG = () => localStorage.getItem("ss_lang") || "vi";
   const t = (vi, en) => (LANG() === "vi" ? vi : en);
@@ -159,7 +159,7 @@ function _json(o) {
           : `<div class="sheets-status fail">${T("sh_last_fail", { t: fmtT(sh.lastPushAt) })}</div>`)
       : `<div class="sheets-status">${T("sh_never")}</div>`;
     const sheetsSection = `
-      <div class="sheets-box">
+      <div class="sheets-box" id="sheetsBox">
         <div class="sheets-head"><b>${T("sh_title")}</b></div>
         <div class="conf-note">${T("sh_sub")}</div>
         ${shStatus}
@@ -223,16 +223,16 @@ function _json(o) {
         const r = await api("/api/billing/subscribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plan: b.dataset.plan }) });
         if (r.checkoutUrl) { window.location.href = r.checkoutUrl; return; }
         if (r.ok) { toast(t("✅ Đã kích hoạt gói pilot 30 ngày", "✅ 30-day pilot plan activated")); closeModal(); renderAcct(); }
-        else toast("❌ " + (r.error || "error"));
+        else showError("❌ " + (r.error || "error"));
       }));
     $("#linkGo")?.addEventListener("click", async () => {
       const r = await api("/api/link-agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: $("#linkCode").value }) });
       if (r.ok) { toast(t("✅ Đã kết nối với đại lý " + r.agent.name, "✅ Linked to " + r.agent.name)); closeModal(); renderAcct(); }
-      else toast("❌ " + (r.error || "error"));
+      else showError("❌ " + (r.error || "error"));
     });
     $("#zaloLinkBtn")?.addEventListener("click", async () => {
       const r = await api("/api/link/zalo-code", { method: "POST" });
-      if (!r.ok) return toast("❌ " + (r.error || "error"));
+      if (!r.ok) return showError("❌ " + (r.error || "error"));
       showModal(`
         <div class="modal-head">💬 ${t("Kết nối Zalo", "Connect Zalo")}</div>
         <div class="modal-body">
@@ -244,24 +244,27 @@ function _json(o) {
       $("#zDone").addEventListener("click", () => { closeModal(); renderAcct(); });
     });
     // ---- Google Sheets: kết nối / đẩy ngay / ngắt kết nối ------------------
+    // Gli ERRORI di questo flusso vanno nella striscia persistente, non nel
+    // toast da 2,2s dove svanivano non letti (audit, coda lunga).
     $("#shConnect")?.addEventListener("click", async () => {
       const r = await api("/api/sheets/config", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: $("#shUrl").value.trim(), secret: $("#shSecret").value }),
       });
-      if (!r.ok) return toast("❌ " + (r.error || "error"));
-      toast(r.push?.ok ? T("sh_saved") : T("sh_test_fail", { e: r.push?.error || "?" }));
+      if (!r.ok) return showError("❌ " + (r.error || "error"));
+      if (r.push?.ok) { hideError(); toast(T("sh_saved")); }
+      else showError(T("sh_test_fail", { e: r.push?.error || "?" }));
       accountModal();   // ri-renderizza con lo stato di sincronizzazione fresco
     });
     $("#shPushNow")?.addEventListener("click", async () => {
       const r = await api("/api/sheets/push", { method: "POST" });
-      if (r.ok) { toast(T("sh_pushed")); accountModal(); }
-      else toast("❌ " + (r.error || "error"));
+      if (r.ok) { hideError(); toast(T("sh_pushed")); accountModal(); }
+      else showError("❌ " + (r.error || "error"));
     });
     $("#shDisc")?.addEventListener("click", async () => {
       const r = await api("/api/sheets/config", { method: "DELETE" });
       if (r.ok) { toast(T("sh_removed")); accountModal(); }
-      else toast("❌ " + (r.error || "error"));
+      else showError("❌ " + (r.error || "error"));
     });
     $("#shCopy")?.addEventListener("click", async () => {
       // Si copia dalla costante GS_CODE, mai dal <pre>: l'auto-traduzione del
@@ -345,7 +348,7 @@ function _json(o) {
     box.querySelectorAll("[data-view]").forEach((b) =>
       b.addEventListener("click", async () => {
         const d = await api("/api/agent/client/" + b.dataset.view);
-        if (!d.ok) return toast("❌ " + (d.error || ""));
+        if (!d.ok) return showError("❌ " + (d.error || ""));
         showModal(`
           <div class="modal-head">📒 ${d.client.name} — ${d.quarter.label}</div>
           <div class="modal-body">
@@ -358,6 +361,16 @@ function _json(o) {
         $("#dClose2").addEventListener("click", closeModal);
       }));
   }
+
+  // ---- Card fiducia Sheets (#how) → sezione Sheets del modal Tài khoản ----
+  // Loggato: apre il modal account e scorre all'ancora #sheetsBox. Anonimo:
+  // la sezione Sheets vive solo dietro il login → si apre la registrazione.
+  async function openSheets() {
+    if (!window.SS.getToken()) return authModal();
+    await accountModal();
+    $("#sheetsBox")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  $("#sheetsTrust")?.addEventListener("click", (e) => { e.preventDefault(); openSheets(); });
 
   window.SS.renderAcct = renderAcct;
   renderAcct();

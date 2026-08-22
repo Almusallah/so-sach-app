@@ -25,6 +25,18 @@ export function realDate(iso) {
   return d.toISOString().slice(0, 10) === iso ? d : null;
 }
 
+// Aritmetica di giorni su una data ISO GIÀ nel fuso VN (l'output di todayVN):
+// si lavora a mezzanotte UTC sulla STRINGA, mai su new Date() del server —
+// "hôm qua" scritto alle 00:30 ICT deve dare ieri VIETNAMITA, non ieri del
+// server UTC. Attraversa mesi, trimestri e anni senza sorprese (setUTCDate
+// normalizza da solo: 2026-04-01 − 1 = 2026-03-31).
+export function addDaysVN(iso, delta) {
+  const d = realDate(iso);
+  if (!d) return null;
+  d.setUTCDate(d.getUTCDate() + Number(delta || 0));
+  return d.toISOString().slice(0, 10);
+}
+
 // Normalizza la data letta da uno scontrino.
 //   → { date, dateNote: null | "swapped" | "guessed" }
 // `dateNote` non è cosmetico: dice al bot se deve chiedere conferma all'utente.

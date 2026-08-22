@@ -104,6 +104,18 @@ def build(lang, out):
          "0316904153 in the public register · the domain at tracuutenmien.gov.vn." if E
          else "<b>Tutto è verificabile senza di noi.</b> sosach.com.vn · l'Official Account su Zalo · codice "
               "d'impresa 0316904153 nel registro pubblico · il dominio su tracuutenmien.gov.vn."),
+        # Le capacità aggiunte questa settimana, in una voce sola: mirror Google
+        # Sheets (sovranità), claim link (ritenzione), strato bilingue e comandi
+        # tolleranti ai refusi con stop-list di sicurezza.
+        ("<b>And it moved again this week.</b> The book now mirrors into a Google Sheet the household itself owns — "
+         "its account, its webhook, no credentials of ours near the data. A one-time claim link turns the Zalo "
+         "trial into a web account with the history intact, and the bot answers in Vietnamese or English, "
+         "forgiving one-letter typos behind a safety stop-list." if E
+         else "<b>E anche questa settimana si è mosso.</b> Il libro ora si rispecchia in un Google Sheet di "
+              "proprietà dell'impresa — il suo account, il suo webhook, nessuna nostra credenziale vicino ai dati. "
+              "Un link di rivendicazione monouso trasforma la prova su Zalo in un account web con la storia "
+              "intatta, e il bot risponde in vietnamita o inglese perdonando i refusi di una lettera dietro una "
+              "stop-list di sicurezza."),
     ], px, H - 64 * mm, W - MARG - px, style=st_small)
     c.setFillColor(GREY); c.setFont("AV-It", 10)
     c.drawString(px, 30 * mm,
@@ -162,12 +174,18 @@ def build(lang, out):
               "documento fotografato, un totale scritto a mano, un saldo portato da un vecchio quaderno. Un mucchio "
               "di numeri è un business di abbonamenti; un registro pesato per provenienza di come commercia davvero "
               "la micro-impresa è qualcosa che un istituto può istruire, e qui nessuno lo raccoglie così."),
+        # La chiusa aggiunge la valuta di conformità: la sorveglianza normativa
+        # settimanale, raccontata come la stessa disciplina applicata alla legge.
         ("<b>This is a correctness product before it is a software product.</b> The first real receipt we processed "
          "produced four different ways of being confidently wrong. All four were caught by tests before a single "
-         "household saw them. Where the output is filed with the tax authority, that discipline is the product." if E
+         "household saw them. Where the output is filed with the tax authority, that discipline is the product — "
+         "and it now watches the law itself: citations verified weekly against primary sources, and it caught its "
+         "first drift on day one." if E
          else "<b>È un prodotto di correttezza prima che di software.</b> Il primo scontrino vero ha prodotto quattro "
               "modi diversi di sbagliare con sicurezza. Tutti e quattro intercettati dai test prima che un'impresa li "
-              "vedesse. Dove l'output si deposita al fisco, quella disciplina è il prodotto."),
+              "vedesse. Dove l'output si deposita al fisco, quella disciplina è il prodotto — e ora sorveglia la "
+              "legge stessa: citazioni verificate ogni settimana sulle fonti primarie, e la prima deriva l'ha colta "
+              "il primo giorno."),
     ], MARG, H - 72 * mm, W - 2 * MARG, style=st_small)
     footer(c, 5, TOTAL, foot); c.showPage()
 

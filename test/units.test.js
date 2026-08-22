@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { todayVN, realDate, normalizeReceiptDate } from "../src/vndate.js";
+import { todayVN, realDate, normalizeReceiptDate, addDaysVN } from "../src/vndate.js";
 import { validate, parseVndAmount } from "../src/extract.js";
 import { parseMoneyCommand, parseAmount } from "../src/amount.js";
 import { totals, quarterOf, quarterlyTax, projectAnnual, thresholdStatus, nextDeadline, CATEGORIES } from "../src/tax.js";
@@ -160,6 +160,109 @@ test("parseMoneyCommand: un numero NUDO non viene mai indovinato", () => {
   const r = parseMoneyCommand("500k");
   assert.equal(r.needsType, true, "deve chiedere thu o chi");
   assert.equal(r.amount, 500_000);
+});
+
+// ---- #3: coda libera → descrizione, parole-data, gergo -----------------------
+test("addDaysVN: ieri e l'altro ieri attraversano mese, trimestre e anno", () => {
+  assert.equal(addDaysVN("2026-08-19", -1), "2026-08-18");
+  assert.equal(addDaysVN("2026-04-01", -1), "2026-03-31", "confine di TRIMESTRE");
+  assert.equal(addDaysVN("2026-01-01", -2), "2025-12-30", "confine di anno");
+  assert.equal(addDaysVN("2026-03-01", -1), "2026-02-28", "febbraio non bisestile");
+  assert.equal(addDaysVN("boh", -1), null, "spazzatura → null, mai una data inventata");
+});
+
+test("parseMoneyCommand: la coda libera diventa la DESCRIZIONE della voce", () => {
+  const cases = [
+    ["thu 2tr4 cà phê",        { type: "thu", amount: 2_400_000, description: "cà phê" }],
+    ["chi 500k tiền điện",     { type: "chi", amount: 500_000, description: "tiền điện" }],
+    ["thu 2 triệu 4 bán sáng", { type: "thu", amount: 2_400_000, description: "bán sáng" }],
+    ["thu 2.400.000 khách đặt tiệc", { type: "thu", amount: 2_400_000, description: "khách đặt tiệc" }],
+    ["mua 350k rau",           { type: "chi", amount: 350_000, description: "rau" }],
+  ];
+  for (const [raw, want] of cases) {
+    const got = parseMoneyCommand(raw);
+    assert.equal(got?.type, want.type, raw);
+    assert.equal(got?.amount, want.amount, raw);
+    assert.equal(got?.description, want.description, raw);
+  }
+  // senza coda: nessuna descrizione nel risultato (il default lo mette il bot)
+  assert.equal(parseMoneyCommand("thu 2tr4").description, undefined);
+  // la descrizione è troncata a 200 come ogni campo del libro
+  assert.equal(parseMoneyCommand("thu 500k " + "x".repeat(300)).description.length, 200);
+});
+
+test("parseMoneyCommand: hôm qua / hôm kia — ieri VIETNAMITA, non del server", () => {
+  const today = "2026-04-01";   // il caso che sposta di TRIMESTRE
+  const cases = [
+    ["thu 2tr4 hôm qua",  { amount: 2_400_000, date: "2026-03-31" }],
+    ["thu hôm qua 2tr4",  { amount: 2_400_000, date: "2026-03-31" }, "parola-data prima dell'importo"],
+    ["chi 500k hôm kia",  { amount: 500_000, date: "2026-03-30" }],
+    ["thu 2tr4 hom qua",  { amount: 2_400_000, date: "2026-03-31" }, "senza diacritici"],
+    ["thu 2tr4 cà phê hôm qua", { amount: 2_400_000, date: "2026-03-31", description: "cà phê" }],
+  ];
+  for (const [raw, want, why] of cases) {
+    const got = parseMoneyCommand(raw, { today });
+    assert.equal(got?.amount, want.amount, `${why || ""} ${raw}`);
+    assert.equal(got?.date, want.date, `${why || ""} ${raw}`);
+    if (want.description) assert.equal(got?.description, want.description, raw);
+  }
+  // senza parola-data il campo date NON esiste: la sceglie il bot (todayVN)
+  assert.equal(parseMoneyCommand("thu 2tr4", { today }).date, undefined);
+});
+
+test("parseAmount: gergo verificato — chai/củ = triệu, lít = trăm nghìn", () => {
+  assert.equal(parseAmount("2 chai"), 2_000_000);
+  assert.equal(parseAmount("2 củ"), 2_000_000);
+  assert.equal(parseAmount("1 lít"), 100_000);
+  assert.equal(parseAmount("2 lit"), 200_000, "senza diacritici");
+  assert.equal(parseAmount("1,5 lít"), 150_000);
+  // "xị" NON produce mai un importo: la conversione cambia per regione
+  assert.equal(parseAmount("2 xị"), null);
+  assert.equal(parseAmount("2 xi"), null);
+});
+
+test('parseMoneyCommand: "thu 2 chai" registra 2 triệu, gergo + data ok', () => {
+  const got = parseMoneyCommand("thu 2 chai", { today: "2026-08-19" });
+  assert.equal(got.type, "thu");
+  assert.equal(got.amount, 2_000_000);
+  const withDate = parseMoneyCommand("thu 2 chai hôm qua", { today: "2026-08-19" });
+  assert.equal(withDate.amount, 2_000_000);
+  assert.equal(withDate.date, "2026-08-18");
+});
+
+test('parseMoneyCommand: "xị" è ambiguo per regione → domanda, MAI una voce', () => {
+  // Le fonti (fptshop, thuthuatphanmem, 22/08/2026) danno 1 xị = 10 nghìn ma
+  // segnalano conversioni diverse per zona: in un registro fiscale non si
+  // indovina — needsAmount + ambiguousUnit, il bot chiede il numero esatto.
+  const got = parseMoneyCommand("thu 2 xị");
+  assert.equal(got.type, "thu");
+  assert.equal(got.needsAmount, true);
+  assert.equal(got.ambiguousUnit, "xị");
+  assert.equal(got.amount, undefined, "nessun importo indovinato");
+});
+
+test("parseMoneyCommand: gergo-CONTENITORE con merce dietro NON si registra", () => {
+  // "chi 2 chai nước" = due bottiglie d'acqua, non 2 triệu; idem "2 lít xăng".
+  // Meglio la domanda mirata di una voce da milioni inventata.
+  for (const raw of ["chi 2 chai nước", "thu 2 chai bia", "chi 2 lít xăng", "chi 5 củ khoai"]) {
+    const got = parseMoneyCommand(raw);
+    assert.equal(got?.needsAmount, true, raw);
+    assert.equal(got?.amount, undefined, raw);
+  }
+});
+
+test("parseMoneyCommand: prefisso THU/CHI + importo illeggibile → needsAmount, mai null", () => {
+  for (const raw of ["thu", "chi", "thu abc", "chi nhiều lắm", "thu 25 khách"]) {
+    const got = parseMoneyCommand(raw);
+    assert.equal(got?.needsAmount, true, raw);
+  }
+  assert.equal(parseMoneyCommand("thu").type, "thu");
+  assert.equal(parseMoneyCommand("chi").type, "chi");
+  // "chiều nay bán chậm" è conversazione, NON un comando chi ("chi" + "ều"):
+  // il \b ASCII-only agganciava anche questo — il lookahead no.
+  assert.equal(parseMoneyCommand("chiều nay bán chậm"), null);
+  // e un numero nudo con coda libera resta fuori dal parser (va al router)
+  assert.equal(parseMoneyCommand("3 người tới quán"), null);
 });
 
 // ---- Motore fiscale ---------------------------------------------------------
@@ -369,6 +472,27 @@ test("matchCommand: non intercetta ciò che non è un comando", () => {
     assert.equal(matchCommand(t), null, JSON.stringify(t));
 });
 
+// ---- #2: i pulsanti del Thanh menu OA mandano l'ETICHETTA, emoji compresa --
+test("matchCommand: le TRE etichette verbatim dei pulsanti OA instradano giuste", () => {
+  // Etichette esatte configurate nell'OA Manager — il momento-star della demo
+  // è un tap su uno di questi tre pulsanti.
+  assert.equal(matchCommand("📊 Quý này"), "quarter", "pulsante quý");
+  assert.equal(matchCommand("📒 Sổ năm nay"), "year", "pulsante sổ");
+  assert.equal(matchCommand("📋 Hướng dẫn"), "menu", "pulsante hướng dẫn");
+});
+
+test("normalize: spoglia emoji e punteggiatura di contorno, mai l'interno", () => {
+  assert.equal(normalize("📊 Quý này"), "quy nay");
+  assert.equal(normalize("✏️ sửa"), "sua", "emoji con selettore di variante");
+  assert.equal(normalize('"menu"'), "menu", "virgolette");
+  assert.equal(normalize("quý?"), "quy", "punteggiatura in coda");
+  assert.equal(normalize("sổ sách"), "so sach", "lo spazio interno resta");
+  // e se lo strip svuoterebbe tutto, resta l'originale: "?" è un alias del menu
+  assert.equal(normalize("?"), "?");
+  assert.equal(matchCommand("?"), "menu");
+  assert.equal(matchCommand("menu!"), "menu", "esclamativo in coda");
+});
+
 test("il menu elenca DAVVERO ogni comando esistente", () => {
   // La regressione da evitare: il testo di aiuto che promette qualcosa che il
   // router non fa (prometteva "tổng kết tháng" e restituiva l'anno).
@@ -542,21 +666,21 @@ import { matchCommandFuzzy, matchLangCommand } from "../src/commands.js";
 import { formatYearMessage, formatLowConfidenceMessage } from "../src/zalo.js";
 import { makePendingStore } from "../src/pending.js";
 
-test("matchCommandFuzzy: tabella — distanza di edit ≤ 1, mai di più", () => {
+test("matchCommandFuzzy: tabella — distanza di edit ≤ 1, SOLO comandi di consultazione", () => {
   const cases = [
     // [input, atteso, perché]
     ["quyy",     "quarter", "lettera doppia"],
     ["menuu",    "menu",    "lettera doppia"],
     ["menw",     "menu",    "sostituzione"],
-    ["suaa",     "fix",     "lettera doppia"],
-    ["undoo",    "fix",     "alias inglese con typo"],
+    ["suaa",     null,      "typo di 'sửa' — fix è DISTRUTTIVO, mai via fuzzy"],
+    ["undoo",    null,      "typo di 'undo' — idem"],
     ["yearr",    "year",    "alias inglese con typo"],
     ["boook",    "year",    "book con lettera doppia"],
-    ["khaii",    "khai",    "khai nudo con typo → help"],
+    ["khaii",    null,      "typo di 'khai' — sintassi fiscale, mai via fuzzy"],
     ["taxx",     "quarter", "alias tax con typo"],
     ["quarterr", "quarter", "8 lettere, 1 edit"],
     ["menu",     "menu",    "l'esatto passa anche dal fuzzy (distanza 0)"],
-    ["sua la",   "fix",     "sua lai monco di 1"],
+    ["sua la",   null,      "sua lai monco di 1 — fix, mai via fuzzy"],
     ["sooo",     null,      "distanza 2 da 'so' — niente indovinelli"],
     ["hepl",     null,      "trasposizione = distanza 2, fuori di proposito"],
     ["xin chao", null,      "testo libero"],
@@ -566,10 +690,25 @@ test("matchCommandFuzzy: tabella — distanza di edit ≤ 1, mai di più", () =>
   }
 });
 
-test("matchCommandFuzzy: pareggio fra due comandi → NESSUN match", () => {
-  // "soa" dista 1 da "sua"/"xoa" (fix) E da "so" (year): indovinare a metà
-  // è peggio che chiedere di riscrivere.
-  assert.equal(matchCommandFuzzy("soa"), null);
+test("matchCommandFuzzy: MAI verso comandi distruttivi o di stato (fix/khai/lingua)", () => {
+  // L'audit #9: "sea", "six", "spa", "sun", "sum" distano 1 edit da sua/fix —
+  // un negozio che scrive il proprio mestiere ("spa") NON deve vedersi
+  // cancellare l'ultima voce fiscale. E nessun typo deve cambiare lingua.
+  for (const w of ["spa", "sea", "six", "sun", "sum", "sia", "sub", "fox", "sha",
+                   "suaa", "xoaa", "undoo", "deletee", "fixx", "khaii", "englsh"]) {
+    const got = matchCommandFuzzy(w);
+    assert.ok(got !== "fix" && got !== "khai", `${w} → ${got} (mai fix/khai)`);
+  }
+  // e il comando esatto resta instradato: la sicurezza non spegne "sửa" vero
+  assert.equal(matchCommand("sửa"), "fix");
+  assert.equal(matchCommand("undo"), "fix");
+  assert.equal(matchCommand("khai"), "khai");
+});
+
+test("matchCommandFuzzy: 'soa' ora va su year — fix non è più raggiungibile dal fuzzy", () => {
+  // Prima era un pareggio a tre ("sua"/"xoa"/"so" → nessun match); con fix
+  // fuori dal fuzzy resta solo "so", e "soa" è un typo plausibile di "sổ".
+  assert.equal(matchCommandFuzzy("soa"), "year");
 });
 
 test("matchCommandFuzzy: parole vietnamite VERE non diventano mai comandi", () => {
@@ -589,10 +728,11 @@ test("matchCommandFuzzy: parole vietnamite VERE non diventano mai comandi", () =
     assert.equal(matchCommand(w), null, `exact: ${w}`);
     assert.equal(matchCommandFuzzy(w), null, `fuzzy: ${w}`);
   }
-  // …e i typo veri continuano a passare: la stop-list non spegne il fuzzy.
+  // …e i typo veri sui comandi di CONSULTAZIONE continuano a passare: la
+  // stop-list non spegne il fuzzy (fix/khai invece sono fuori per scelta, #9).
   assert.equal(matchCommandFuzzy("quyy"), "quarter");
-  assert.equal(matchCommandFuzzy("suaa"), "fix");
-  assert.equal(matchCommandFuzzy("khaii"), "khai");
+  assert.equal(matchCommandFuzzy("menuu"), "menu");
+  assert.equal(matchCommandFuzzy("yearr"), "year");
 });
 
 test("matchCommandFuzzy: i guardrail — soldi, cifre, codici, input corti", () => {
@@ -783,6 +923,7 @@ test("pendingStore: gli uid non si mescolano", () => {
 import {
   mintClaimToken, verifyClaimToken, hashClaimToken,
   makeMemoryClaimRegistry, claimCtaLine, claimReminderLine, claimPromptFor,
+  makeClaimLinkSource,
 } from "../src/claim.js";
 
 const SECRET = "claim-test-secret";
@@ -839,6 +980,53 @@ test("claim: UN token per uid — il re-mint invalida il precedente", () => {
   // …e il re-mint di un ALTRO uid non tocca nessuno dei due
   mintClaimToken("z2", { secret: SECRET, now: NOW, registry: reg });
   assert.deepEqual(verifyClaimToken(t2, { secret: SECRET, now: NOW + 2000, registry: reg }), { zaloId: "z1" });
+});
+
+// ---- #8: il link si RIUSA — ogni prompt non conia (e non uccide) più nulla --
+test("claimLinkSource: due prompt → lo STESSO link, e il token resta valido", () => {
+  const reg = makeMemoryClaimRegistry();
+  const linkFor = makeClaimLinkSource({ secret: SECRET, registry: reg, origin: "https://x.vn", now: () => NOW });
+  const l1 = linkFor("z1");
+  const l2 = linkFor("z1");
+  assert.equal(l1, l2, "il secondo prompt riusa il token, non lo rimonta");
+  const tok = l1.split("/claim/")[1];
+  assert.deepEqual(verifyClaimToken(tok, { secret: SECRET, now: NOW, registry: reg }), { zaloId: "z1" },
+    "il link della CTA verifica ancora dopo il re-prompt — il bug dell'audit #8 era proprio questo");
+  // uid diversi → link diversi, nessuna contaminazione di cache
+  assert.notEqual(linkFor("z2"), l1);
+});
+
+test("claimLinkSource: scaduto → si conia un token NUOVO (e solo allora)", () => {
+  const reg = makeMemoryClaimRegistry();
+  let t = NOW;
+  const linkFor = makeClaimLinkSource({ secret: SECRET, registry: reg, origin: "https://x.vn", now: () => t });
+  const l1 = linkFor("z1");
+  t = NOW + H72;                     // esattamente alla scadenza: ancora valido
+  assert.equal(linkFor("z1"), l1, "al limite del TTL si riusa ancora");
+  t = NOW + H72 + 1;                 // oltre: si rimonta
+  const l2 = linkFor("z1");
+  assert.notEqual(l2, l1, "scaduto → link nuovo");
+  const tok2 = l2.split("/claim/")[1];
+  assert.deepEqual(verifyClaimToken(tok2, { secret: SECRET, now: t, registry: reg }), { zaloId: "z1" });
+});
+
+test("claimLinkSource: un mint ESTERNO supera la cache — si segue il registro", () => {
+  // Il gancio test-mint (e qualunque conio fuori dalla cache) ruota l'hash:
+  // la sorgente se ne accorge alla verifica e conia di nuovo, mai un link morto.
+  const reg = makeMemoryClaimRegistry();
+  let t = NOW;
+  const linkFor = makeClaimLinkSource({ secret: SECRET, registry: reg, origin: "https://x.vn", now: () => t });
+  const l1 = linkFor("z1");
+  mintClaimToken("z1", { secret: SECRET, now: NOW + 1000, registry: reg });   // supersessione esterna
+  const tok1 = l1.split("/claim/")[1];
+  assert.equal(verifyClaimToken(tok1, { secret: SECRET, now: NOW + 1500, registry: reg }).error, "invalid",
+    "premessa: il mint esterno ha davvero superato il token in cache");
+  t = NOW + 2000;                    // il clock avanza → il re-mint produce un token diverso
+  const l2 = linkFor("z1");
+  assert.notEqual(l2, l1, "la cache non deve mai servire un token superato");
+  const tok2 = l2.split("/claim/")[1];
+  assert.deepEqual(verifyClaimToken(tok2, { secret: SECRET, now: NOW + 3000, registry: reg }), { zaloId: "z1" },
+    "il link nuovo verifica: mai un link morto in mano all'utente");
 });
 
 test("claim: la CTA esce UNA volta sola per libro (claimPromptedAt)", () => {

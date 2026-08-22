@@ -11,10 +11,24 @@ import { parseAmount } from "./amount.js";
 
 // I vietnamiti scrivono spessissimo senza segni diacritici (tastiera, fretta,
 // telefono di qualcun altro): "sổ", "so", "SỔ" e "sô" devono valere uguale.
+//
+// E i pulsanti del Thanh menu OA mandano la loro ETICHETTA con l'emoji dentro:
+// "📊 Quý này" deve instradare come "quý này", non cadere sul menu generico
+// proprio nel momento-star della demo. Quindi si spogliano emoji, selettori di
+// variante e punteggiatura di contorno — SOLO in testa e in coda, mai dentro
+// la frase. Se lo strip svuota tutto (l'utente ha scritto solo "?" o solo un
+// emoji) si tiene l'originale: "?" è un alias del menu e deve restare tale.
+// \uFE00-\uFE0F = selettori di variante, \u200D = zero-width joiner,
+// \u20E3 = combining keycap: i pezzi «invisibili» degli emoji composti.
+const EDGE_NOISE =
+  /^[\p{Extended_Pictographic}\p{P}\p{S}\uFE00-\uFE0F\u200D\u20E3\s]+|[\p{Extended_Pictographic}\p{P}\p{S}\uFE00-\uFE0F\u200D\u20E3\s]+$/gu;
+
 export function normalize(s) {
-  return String(s || "").trim().toLowerCase()
+  const base = String(s || "").trim().toLowerCase()
     .normalize("NFD").replace(/[̀-ͯ]/g, "")
     .replace(/đ/g, "d");
+  const stripped = base.replace(EDGE_NOISE, "");
+  return stripped || base;
 }
 
 // Ogni comando porta anche gli alias INGLESI nella stessa lista `match`: un
@@ -71,7 +85,9 @@ export const COMMANDS = [
     desc_en: "this quarter's totals, provisional tax and the tờ khai deadline",
   },
   {
-    key: "year", match: ["so", "so sach", "tong ket", "year", "book", "summary"], icon: "📒",
+    // "so nam nay": l'etichetta del pulsante OA "📒 Sổ năm nay" post-normalize
+    // — il Thanh menu manda il testo dell'etichetta, e deve instradare qui.
+    key: "year", match: ["so", "so sach", "so nam nay", "tong ket", "year", "book", "summary"], icon: "📒",
     label_vi: 'Gõ "sổ"',
     desc_vi: "tổng kết cả năm và khoảng cách tới ngưỡng 1 tỷ",
     label_en: 'Type "year"',
@@ -125,12 +141,12 @@ function withinOneEdit(a, b) {
 const MONEY_WORDS = new Set(["thu", "chi", "mua", "ban", "dt", "cp"]);
 
 // Parole vietnamite VERE a distanza di edit ≤ 1 da un comando: "của", "vừa",
-// "hoa", "đùa", "hai"… scritte da sole sono conversazione, non un typo — e il
-// fuzzy che le scambiasse per un comando CANCELLEREBBE una voce del libro
-// ("sửa"/"xoá") o risponderebbe con la sintassi del tự khai ("hai" → khai).
-// Forme POST-normalize, verificate una a una contro withinOneEdit. I collisori
-// del solo "menu" ("giữ", "mến") non servono qui: il testo sconosciuto riceve
-// comunque il menu.
+// "hoa", "đùa", "hai"… scritte da sole sono conversazione, non un typo.
+// Da quando il fuzzy instrada solo verso menu/quarter/year (FUZZY_SAFE, sotto)
+// i collisori di "sua"/"xoa"/"khai" non sono più pericolosi — restano in lista
+// come seconda cintura di sicurezza, non costano niente. Forme POST-normalize,
+// verificate una a una contro withinOneEdit. I collisori del solo "menu"
+// ("giữ", "mến") non servono qui: il testo sconosciuto riceve comunque il menu.
 const VN_STOP_WORDS = new Set([
   "qua",                                                    // quà/quá/qua → "quy" (oggi salvato dal pareggio con "sua"; qui per robustezza)
   "cua", "bua", "vua", "dua", "hoa", "toa", "xua", "xoay",  // của/bữa/vừa/dưa·đùa/hoa/toà/xưa/xoay → "sua"/"xoa" (fix: CANCELLA)
@@ -148,8 +164,17 @@ const VN_STOP_WORDS = new Set([
 //     restare un codice sbagliato, non diventare un comando;
 //   • parola-denaro nuda ("thu", "chi"…): vedi sopra;
 //   • parola vietnamita vera nella stop-list ("của", "hai"…): vedi sopra;
-//   • pareggio fra DUE comandi diversi ("soa" dista 1 da "sua", "xoa" E
-//     "so"): nessun match — indovinare a metà è peggio che richiedere.
+//   • pareggio fra DUE comandi diversi: nessun match — indovinare a metà è
+//     peggio che richiedere.
+//
+// E il guardrail più importante: il fuzzy instrada SOLO verso comandi di
+// CONSULTAZIONE (menu/quarter/year). Mai verso "fix" — «spa», «sea», «six»
+// distano 1 edit da sua/fix e un negozio che scrive il proprio mestiere non
+// deve vedersi cancellare l'ultima voce del registro; mai verso "khai"
+// (sintassi fiscale); il cambio lingua non passa comunque di qui. Un typo su
+// "sửa" riceve il menu: fastidioso, ma reversibile — l'opposto non lo è.
+const FUZZY_SAFE = new Set(["menu", "quarter", "year"]);
+
 export function matchCommandFuzzy(raw) {
   const n = normalize(raw);
   if (n.length < 3) return null;
@@ -159,7 +184,7 @@ export function matchCommandFuzzy(raw) {
   if (VN_STOP_WORDS.has(n)) return null;
   const keys = new Set();
   for (const c of COMMANDS) {
-    if (!c.match) continue;
+    if (!c.match || !FUZZY_SAFE.has(c.key)) continue;
     if (c.match.some((m) => withinOneEdit(n, m))) keys.add(c.key);
   }
   return keys.size === 1 ? [...keys][0] : null;

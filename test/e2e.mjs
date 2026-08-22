@@ -11,10 +11,12 @@ import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PORT = 3599, BASE = `http://127.0.0.1:${PORT}`;
+// Porte nella fascia 3530-3539 riservata ai test di questo repo (bot/backend):
+// le altre corsie di lavoro girano server propri in parallelo su fasce diverse.
+const PORT = 3530, BASE = `http://127.0.0.1:${PORT}`;
 // Porta del finto Apps Script (sezione 8): il server lo raggiunge solo perché
 // SHEETS_TEST_HOSTS whitelist-a 127.0.0.1 — in produzione la env non esiste.
-const FPORT = 3598;
+const FPORT = 3531;
 const env = { ...process.env, PORT, NODE_ENV: "test", SESSION_SECRET: "test-secret-e2e",
   DATABASE_URL: "", ANTHROPIC_API_KEY: "", DATA_DIR: "",
   SHEETS_TEST_HOSTS: "127.0.0.1", SHEETS_DEBOUNCE_MS: "1000" };
@@ -466,6 +468,58 @@ try {
     assert.equal(expired.body.code, "expired");
   });
   token = savedTok8b;
+
+  // --- 8c. "sửa" chiede conferma; eventi non-testo non toccano il libro ------
+  // sendText è spenta (nessun token OA), quindi le RISPOSTE del bot non si
+  // leggono da qui: si osservano gli EFFETTI sul libro — il conteggio voci via
+  // test-mint + preview, la stessa via della sezione 8b.
+  const savedTok8c = token; token = null;
+  const ZFIX = "zfix" + String(Date.now()).slice(-6);
+  let zmsg = 0;
+  const zText = (text) => api("/webhooks/zalo", { method: "POST", body: JSON.stringify({
+    event_name: "user_send_text", sender: { id: ZFIX },
+    message: { text, msg_id: `m-fix-${++zmsg}` }, timestamp: Date.now() }) });
+  const zEvent = (event_name) => api("/webhooks/zalo", { method: "POST", body: JSON.stringify({
+    event_name, sender: { id: ZFIX },
+    message: { msg_id: `m-fix-${++zmsg}` }, timestamp: Date.now() }) });
+  const settle = () => new Promise((r) => setTimeout(r, 600));   // l'ACK precede l'elaborazione
+  const zCount = async () => {
+    const t = (await api(`/api/claim/test-mint/${ZFIX}`)).body.token;
+    return (await api(`/api/claim/preview/${t}`)).body.entries;
+  };
+
+  await zText("thu 2tr4"); await settle();
+  await zText("chi 500k"); await settle();
+  const beforeFix = await zCount();
+  check("premessa: il libro Zalo ha 2 voci", () => assert.equal(beforeFix, 2));
+
+  await zText("sửa"); await settle();
+  const afterAsk = await zCount();
+  check('"sửa" NON cancella più da solo: le voci sono ancora 2 (aspetta il "1")', () =>
+    assert.equal(afterAsk, 2));
+
+  await zText("menu"); await settle();     // qualunque altro testo annulla in silenzio
+  await zText("1"); await settle();        // …e ora "1" NON deve più cancellare
+  const afterCancel = await zCount();
+  check('conferma annullata da un altro messaggio: "1" tardivo non cancella', () =>
+    assert.equal(afterCancel, 2));
+
+  await zText("sửa"); await settle();
+  await zText("1"); await settle();        // conferma entro il TTL → cancella
+  const afterConfirm = await zCount();
+  check('"sửa" + "1" cancella UNA voce (l\'ultima)', () => assert.equal(afterConfirm, 1));
+
+  // eventi utente non-testo: il bot risponde (vocale/file) o tace (sticker),
+  // ma NON scrive mai nel libro e NON muore.
+  await zEvent("user_send_audio"); await settle();
+  await zEvent("user_send_file"); await settle();
+  await zEvent("user_send_sticker"); await settle();
+  const afterEvents = await zCount();
+  check("vocale/file/sticker: nessuna voce scritta nel libro", () =>
+    assert.equal(afterEvents, 1));
+  const health8c = await api("/healthz");
+  check("healthz ok dopo gli eventi non-testo", () => assert.equal(health8c.body.ok, true));
+  token = savedTok8c;
 
   // --- 9. Il secret non esce MAI --------------------------------------------
   // Il setaccio finale: il secret viaggia SOLO nel corpo della POST di config

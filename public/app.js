@@ -12,10 +12,19 @@ const Q = "?uid=" + ANON;
 
 // api(): allega il Bearer token quando l'utente è loggato — il server allora
 // usa il libro dell'account invece della sandbox anonima (stessi endpoint).
-const api = (u, opts = {}) => {
+// Rete giù / risposta non-JSON: prima moriva in silenzio (audit, form muti) —
+// ora mostra la striscia d'errore persistente e rilancia, così il chiamante
+// non prosegue con dati fantasma.
+const api = async (u, opts = {}) => {
   const token = localStorage.getItem("ss_token");
   if (token) opts.headers = { ...(opts.headers || {}), Authorization: "Bearer " + token };
-  return fetch(u, opts).then((r) => r.json());
+  try {
+    const r = await fetch(u, opts);
+    return await r.json();
+  } catch (e) {
+    showError(T("err_net"));
+    throw e;
+  }
 };
 const vnd = (n) => (Number(n) || 0).toLocaleString("vi-VN") + "đ";
 // Formato compatto per numeri grandi (barre/etichette): 1,2 tỷ · 850 triệu.
@@ -48,6 +57,16 @@ const I18N = {
   s3: { vi: "mỗi tháng — rẻ hơn một bữa trưa", en: "per month — cheaper than lunch" },
   how_kicker: { vi: "Cách hoạt động", en: "How it works" },
   how_h2: { vi: "Ba bước, không cần biết kế toán", en: "Three steps, zero accounting" },
+  // Card fiducia Google Sheets (#how): VI dal work-order dell'audit #6, EN
+  // sulla falsariga di sh_sub. Il click apre la sezione Sheets del modal.
+  how_sheets: { vi: "Sổ tự chép sang Google Sheet <b>CỦA BẠN</b> — bạn giữ chìa khoá, không ai khác.", en: "Your ledger auto-copies to a Google Sheet <b>YOU</b> own — you hold the keys, no one else." },
+  how_sheets_go: { vi: "Cách kết nối →", en: "How to connect →" },
+  // Mock chat dell'hero: SOLO comandi reali ("quý"/"sổ") e risposte nel
+  // formato di src/zalo.js. In EN si traduce la cornice, i termini fiscali
+  // (tờ khai, hạn nộp, 1 tỷ, quý, sổ) restano vietnamiti — come fa il bot.
+  hc_entry: { vi: "✅ Đã ghi vào Sổ Sạch:<br/>📉 CHI 385.000đ<br/>Đại lý gạo Minh Tâm — Mua gạo, nguyên liệu<br/>Ngày: 04/08/2026<br/>Trả lời \"sửa\" nếu cần chỉnh · \"quý\" xem quý này.", en: "✅ Recorded in Sổ Sạch:<br/>📉 OUT 385.000đ<br/>Đại lý gạo Minh Tâm — Mua gạo, nguyên liệu<br/>Date: 04/08/2026<br/>Reply \"undo\" to fix · \"quý\" for this quarter." },
+  hc_quarter: { vi: "📊 Quý 3/2026 — tính đến 04/08/2026<br/>Thu: 18.450.000đ · Chi: 7.120.000đ<br/>Lãi gộp: 11.330.000đ<br/><br/>✅ Doanh thu dự kiến cả năm 166.860.000đ — dưới ngưỡng 1 tỷ. Quý này chưa phải nộp thuế, nhưng VẪN phải nộp tờ khai.<br/>🗓️ Hạn nộp tờ khai: 31/10/2026", en: "📊 Quý 3/2026 (quarter) — as of 04/08/2026<br/>In (thu): 18.450.000đ · Out (chi): 7.120.000đ<br/>Gross: 11.330.000đ<br/><br/>✅ Projected full-year revenue 166.860.000đ — below the 1 tỷ threshold. No tax due this quarter, but the tờ khai STILL has to be filed.<br/>🗓️ Hạn nộp tờ khai (filing deadline): 31/10/2026" },
+  hc_year: { vi: "📒 Sổ năm 2026<br/>Thu: 98.750.000đ · Chi: 41.980.000đ<br/>Lãi gộp: 56.770.000đ<br/><br/>Dự kiến cả năm: 166.860.000đ<br/>✅ Còn 833.140.000đ nữa mới tới ngưỡng 1 tỷ.", en: "📒 Book 2026<br/>In (thu): 98.750.000đ · Out (chi): 41.980.000đ<br/>Gross: 56.770.000đ<br/><br/>Projected full year: 166.860.000đ<br/>✅ 833.140.000đ to go before the 1 tỷ threshold." },
   w_kicker: { vi: "Doanh thu vào sổ", en: "Getting revenue in" },
   w_h2: { vi: "Không ai chụp 200 ly cà phê", en: "Nobody photographs 200 coffees" },
   w_p: { vi: "Hoá đơn mua hàng thì chụp là xong. Còn tiền bán mỗi ngày? Chọn cách nào tiện nhất cho bạn — cả ba đều vào chung một sổ.", en: "Purchase invoices are easy — just snap them. But daily sales? Pick whichever way suits you; all three land in the same book." },
@@ -194,6 +213,10 @@ const I18N = {
   op_save: { vi: "Lưu số dư đầu kỳ", en: "Save opening balances" },
   op_saved: { vi: "Đã lưu số dư đầu kỳ.", en: "Opening balances saved." },
   d_period: { vi: "Kỳ tính thuế", en: "Tax period" },
+  // In EN il valore del periodo resta "Quý N năm Y" con la glossa (QN YYYY);
+  // la nota di esenzione dal server è solo VI → coppia EN qui (il testo VI
+  // DEVE restare identico a src/declaration.js).
+  d_exempt_note: { vi: "Doanh thu dự kiến cả năm dưới ngưỡng chịu thuế — vẫn phải nộp tờ khai.", en: "Projected full-year revenue is below the taxable threshold — the tờ khai still has to be filed." },
   d_taxpayer: { vi: "Người nộp thuế", en: "Taxpayer" },
   d_cat: { vi: "Ngành nghề", en: "Category" },
   d_rev: { vi: "Doanh thu tính thuế trong quý", en: "Taxable revenue this quarter" },
@@ -227,6 +250,11 @@ const I18N = {
   sh_step5: { vi: "Dán đường dẫn + SECRET vào hai ô phía trên và bấm <b>Kết nối</b>.", en: "Paste the URL + SECRET into the two fields above and hit <b>Connect</b>." },
   sh_copy: { vi: "📋 Sao chép mã", en: "📋 Copy the code" },
   sh_copied: { vi: "✅ Đã sao chép — dán vào Apps Script.", en: "✅ Copied — paste it into Apps Script." },
+  // Striscia d'errore persistente (rete giù / salvataggi falliti / Sheets).
+  err_net: { vi: "⚠️ Mất mạng — kiểm tra kết nối rồi thử lại.", en: "⚠️ No connection — check your network and retry." },
+  err_amount: { vi: "⚠️ Chưa nhập số tiền — nhập số tiền rồi bấm \"Ghi vào sổ\".", en: "⚠️ Amount missing — enter an amount, then hit \"Record entry\"." },
+  err_save: { vi: "⚠️ Chưa ghi được vào sổ: {e}", en: "⚠️ Could not save the entry: {e}" },
+  err_generic: { vi: "⚠️ Có lỗi: {e}", en: "⚠️ Something went wrong: {e}" },
 };
 const T = (k, vars) => {
   let s = (I18N[k] || {})[LANG] || (I18N[k] || {}).vi || k;
@@ -248,6 +276,16 @@ function toast(msg) {
   t.textContent = msg; t.classList.add("show");
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
 }
+// Striscia d'errore PERSISTENTE: il toast da 2,2s va bene per i successi, ma
+// un errore (rete, salvataggio, connessione Sheets) deve restare leggibile
+// finché l'utente non lo chiude. Un nuovo errore sostituisce il testo.
+function showError(msg) {
+  const s = $("#errStrip");
+  if (!s) return;
+  $("#errStripMsg").textContent = msg;
+  s.classList.remove("hidden");
+}
+function hideError() { $("#errStrip")?.classList.add("hidden"); }
 function showModal(html) { $("#modal").innerHTML = html; $("#modalBg").classList.add("open"); }
 function closeModal() { $("#modalBg").classList.remove("open"); }
 
@@ -396,7 +434,7 @@ function waitlistModal() {
 async function seedSample() {
   toast("⏳ …");
   const r = await api("/api/demo-seed" + Q, { method: "POST" });
-  if (r.ok) { toast(T("sample_loaded")); refresh(); } else toast("❌ " + (r.error || ""));
+  if (r.ok) { toast(T("sample_loaded")); refresh(); } else showError(T("err_generic", { e: r.error || "?" }));
 }
 async function clearSample() {
   const r = await api("/api/demo-seed" + Q, { method: "DELETE" });
@@ -458,6 +496,7 @@ async function refresh() {
         </tr>`).join("")}
     </table>
     ${d.entries.length > 40 ? `<div class="src" style="padding:10px;text-align:center">${T("more_entries", { n: d.entries.length - 40 })}</div>` : ""}`;
+    markLedgerScrollable();
     $("#clearSampleBtn")?.addEventListener("click", clearSample);
     // eliminazione in due tocchi (niente cancellazioni accidentali)
     $("#ledger").querySelectorAll("[data-del]").forEach((b) =>
@@ -474,6 +513,14 @@ async function refresh() {
   }
 }
 
+// La sfumatura-indizio sulla colonna 🗑 sticky compare solo quando la tabella
+// trabocca DAVVERO: l'affordance "c'è altro sotto" non deve mentire su desktop.
+function markLedgerScrollable() {
+  const led = $("#ledger");
+  if (led) led.classList.toggle("scrollable", led.scrollWidth > led.clientWidth + 1);
+}
+window.addEventListener("resize", markLedgerScrollable);
+
 // ---- Estrazione da foto -----------------------------------------------------------
 async function handleFile(file) {
   const buf = await file.arrayBuffer();
@@ -485,7 +532,7 @@ async function handleFile(file) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ image: base64, mediaType: file.type || "image/jpeg" }),
   });
-  if (!r.ok) { toast("❌ " + (r.error || "error")); return; }
+  if (!r.ok) { showError(T("err_generic", { e: r.error || "error" })); return; }
   confirmEntry(r.extracted);
 }
 
@@ -512,9 +559,14 @@ function confirmEntry(x) {
       type: $("#cType").value,
       amount: Number(String($("#cAmount").value).replace(/[^\d]/g, "")),
       counterparty: $("#cWho").value, description: $("#cDesc").value, date: $("#cDate").value,
+      // La voce nasce da una foto letta da /api/extract: la colonna "Gốc"
+      // deve dire "photo" come fa il ramo foto del bot Zalo — il form manuale
+      // invece non manda provenance e il server default a "manual".
+      provenance: "photo",
     };
     const r = await api("/api/ledger" + Q, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (r.ok) { closeModal(); toast(T("saved")); refresh(); }
+    if (r.ok) { closeModal(); hideError(); toast(T("saved")); refresh(); }
+    else showError(T("err_save", { e: r.error || "?" }));
   });
 }
 
@@ -522,23 +574,31 @@ function confirmEntry(x) {
 async function openDeclaration() {
   const d = await api("/api/declaration" + Q);
   const pr = (n) => (n * 100).toFixed(1).replace(".0", "");
+  // Date ISO (2026-10-31) → dd/mm/yyyy: è il formato che l'hộ legge davvero.
+  const dmy = (iso) => /^\d{4}-\d{2}-\d{2}$/.test(iso || "") ? iso.slice(8, 10) + "/" + iso.slice(5, 7) + "/" + iso.slice(0, 4) : (iso || "");
+  // In EN i nomi dei moduli restano vietnamiti con UNA glossa tra parentesi
+  // (01/CNKD e BẢN NHÁP); il periodo "Quý N năm Y" prende la glossa (QN YYYY).
+  const formLine = LANG === "en"
+    ? `${d.form} <small>(01/CNKD — the hộ kinh doanh quarterly tax form; BẢN NHÁP = draft)</small>`
+    : d.form;
+  const periodLine = LANG === "en" ? `${d.period} (Q${d.quarter} ${d.year})` : d.period;
   showModal(`
     <div class="modal-head">${T("decl_title")}</div>
     <div class="modal-body decl">
-      <h4>${d.form}</h4>
-      <div class="sub">${d.period}</div>
+      <h4>${formLine}</h4>
+      <div class="sub">${periodLine}</div>
       <table>
-        <tr><td>${T("d_made")}</td><td>${d.generatedAt || ""}</td></tr>
+        <tr><td>${T("d_made")}</td><td>${dmy(d.generatedAt)}</td></tr>
         <tr><td>${T("d_taxpayer")}</td><td><b>${d.taxpayer}</b></td></tr>
         <tr><td>${T("d_cat")}</td><td>${LANG === "vi" ? d.category.vi : d.category.en}</td></tr>
         <tr><td>${T("d_rev")}</td><td><b>${vnd(d.revenue)}</b></td></tr>
         <tr><td>${T("d_vat", { r: pr(d.rates.vat) })}</td><td>${vnd(d.vat)}</td></tr>
         <tr><td>${T("d_pit", { r: pr(d.rates.pit) })}</td><td>${vnd(d.pit)}</td></tr>
         <tr class="tot"><td>${T("d_tot")}</td><td>${vnd(d.total)}</td></tr>
-        <tr><td>${T("d_due")}</td><td><b>${d.deadline || ""}</b></td></tr>
+        <tr><td>${T("d_due")}</td><td><b>${dmy(d.deadline)}</b></td></tr>
         ${d.declaredRevenue ? `<tr><td>${T("d_declared")}</td><td>${vnd(d.declaredRevenue)}</td></tr>` : ""}
       </table>
-      ${d.exempt ? `<div class="conf-note">${d.exemptNote}</div>` : ""}
+      ${d.exempt ? `<div class="conf-note">${T("d_exempt_note")}</div>` : ""}
       ${d.agent ? `<div class="conf-note">🧑‍💼 ${LANG === "vi" ? "Đại lý thuế của bạn" : "Your tax agent"}: <b>${d.agent.name}</b> (${d.agent.phone})</div>` : ""}
       <div class="disc">${d.disclaimer}</div>
       <div class="share-foot">📒 ${LANG === "vi" ? "Tạo bởi" : "Made with"} <b>Sổ Sạch</b> — sosach.com.vn</div>
@@ -586,9 +646,10 @@ async function openOpening() {
       const num = (id) => Number(String($(id).value || "").replace(/[^0-9]/g, "")) || 0;
       quarters[q] = { revenue: num(`#opR${q}`), expenses: num(`#opE${q}`) };
     }
-    await api("/api/opening" + Q, { method: "POST", headers: { "Content-Type": "application/json" },
+    const r = await api("/api/opening" + Q, { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ year, quarters }) });
-    closeModal(); toast(T("op_saved")); await refresh();
+    if (!r.ok) { showError(T("err_save", { e: r.error || "?" })); return; }
+    closeModal(); hideError(); toast(T("op_saved")); await refresh();
   });
 }
 
@@ -624,13 +685,17 @@ async function init() {
       counterparty: $("#mWho").value, description: $("#mDesc").value,
       date: $("#mDate").value || undefined,
     };
-    if (!body.amount) return;
+    // Prima l'importo mancante usciva in silenzio (audit, form muti): ora
+    // l'errore resta visibile finché l'utente non lo chiude.
+    if (!body.amount) { showError(T("err_amount")); return; }
     const r = await api("/api/ledger" + Q, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (r.ok) { $("#manualForm").reset(); toast(T("saved")); refresh(); }
+    if (r.ok) { $("#manualForm").reset(); hideError(); toast(T("saved")); refresh(); }
+    else showError(T("err_save", { e: r.error || "?" }));
   });
   $("#declBtn").addEventListener("click", openDeclaration);
   $("#openingBtn").addEventListener("click", openOpening);
   $("#waitlistBtn")?.addEventListener("click", waitlistModal);
+  $("#errStripX")?.addEventListener("click", hideError);
   $("#modalBg").addEventListener("click", (e) => { if (e.target.id === "modalBg") closeModal(); });
   $("#langBtn").addEventListener("click", () => {
     LANG = LANG === "vi" ? "en" : "vi";
@@ -669,6 +734,8 @@ async function init2() {
 
 // Espone gli helper condivisi ad account.js (auth, gói, đại lý thuế, Sheets).
 // T incluso: la sezione Google Sheets del modal account usa il dizionario I18N.
-window.SS = { api, refresh, toast, showModal, closeModal, vnd, T };
+// showError/hideError: gli errori del flusso Sheets devono restare visibili,
+// non svanire nel toast (audit, coda lunga).
+window.SS = { api, refresh, toast, showModal, closeModal, vnd, T, showError, hideError };
 
 init();

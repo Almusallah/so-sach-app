@@ -81,15 +81,18 @@
           <span data-i18n="trust3">📄 Tờ khai 01/CNKD soạn sẵn</span>
         </div>
       </div>
+      <!-- Mock fedele al bot VERO: solo comandi che esistono ("quý" e "sổ",
+           src/commands.js) e risposte nel formato di src/zalo.js. I comandi
+           digitati e i termini fiscali restano vietnamiti anche in EN. -->
       <div class="hero-chat" aria-hidden="true">
         <div class="chat-head">💬 Zalo — Sổ Sạch</div>
         <div class="chat-body">
           <div class="msg me"><span class="photo">📷 hoadon_sang.jpg</span></div>
-          <div class="msg bot">✅ Đã ghi vào Sổ Sạch:<br/>📉 CHI 385.000đ<br/>Đại lý gạo Minh Tâm — Mua gạo, nguyên liệu<br/>Ngày: 04/07/2026</div>
+          <div class="msg bot" data-i18n="hc_entry">✅ Đã ghi vào Sổ Sạch:<br/>📉 CHI 385.000đ<br/>Đại lý gạo Minh Tâm — Mua gạo, nguyên liệu<br/>Ngày: 04/08/2026<br/>Trả lời "sửa" nếu cần chỉnh · "quý" xem quý này.</div>
+          <div class="msg me">quý</div>
+          <div class="msg bot" data-i18n="hc_quarter">📊 Quý 3/2026 — tính đến 04/08/2026<br/>Thu: 18.450.000đ · Chi: 7.120.000đ<br/>Lãi gộp: 11.330.000đ<br/><br/>✅ Doanh thu dự kiến cả năm 166.860.000đ — dưới ngưỡng 1 tỷ. Quý này chưa phải nộp thuế, nhưng VẪN phải nộp tờ khai.<br/>🗓️ Hạn nộp tờ khai: 31/10/2026</div>
           <div class="msg me">sổ</div>
-          <div class="msg bot">📒 Sổ tháng 7:<br/>Thu: 18.450.000đ · Chi: 7.120.000đ<br/>Lãi gộp: 11.330.000đ<br/><br/>⚠️ Doanh thu cả năm dự kiến 214 triệu — còn cách ngưỡng chịu thuế 1 tỷ. Yên tâm bán hàng!</div>
-          <div class="msg me">điểm</div>
-          <div class="msg bot">💎 Điểm Sổ Sạch: <b>82/100 (B)</b><br/>Sổ đẹp, đều tay — hồ sơ vay vốn sẵn sàng 🏦</div>
+          <div class="msg bot" data-i18n="hc_year">📒 Sổ năm 2026<br/>Thu: 98.750.000đ · Chi: 41.980.000đ<br/>Lãi gộp: 56.770.000đ<br/><br/>Dự kiến cả năm: 166.860.000đ<br/>✅ Còn 833.140.000đ nữa mới tới ngưỡng 1 tỷ.</div>
         </div>
       </div>
     </div>
@@ -114,6 +117,13 @@
         <div class="how-card"><div class="n">2</div><h3 data-i18n="how2_t">AI ghi sổ</h3><p data-i18n="how2_p">Sổ Sạch đọc ảnh, tự phân loại thu/chi, ghi vào sổ. Sai thì sửa một chạm. Cuối tháng có tổng kết rõ ràng.</p></div>
         <div class="how-card"><div class="n">3</div><h3 data-i18n="how3_t">Tờ khai soạn sẵn</h3><p data-i18n="how3_p">Đến kỳ, tờ khai 01/CNKD đã điền sẵn số liệu. Ký, nộp — hoặc gửi thẳng cho đại lý thuế của bạn.</p></div>
       </div>
+      <!-- Card fiducia: il dato resta dell'utente (Google Sheets). Il click
+           porta alla sezione Sheets del modal Tài khoản (account.js). -->
+      <a class="sheets-trust" id="sheetsTrust" href="#sheetsBox">
+        <span class="sheets-trust-ico" aria-hidden="true">📗</span>
+        <span class="sheets-trust-txt" data-i18n="how_sheets">Sổ tự chép sang Google Sheet <b>CỦA BẠN</b> — bạn giữ chìa khoá, không ai khác.</span>
+        <span class="sheets-trust-go" data-i18n="how_sheets_go">Cách kết nối →</span>
+      </a>
       <div class="cta-row center">
         <a href="#app" class="cta-primary" data-i18n="cta_try">Dùng thử ngay — miễn phí</a>
         <a href="#zalo" class="cta-secondary" data-i18n="cta_join">Đăng ký 100 hộ đầu tiên →</a>
@@ -308,6 +318,12 @@
   <!-- Modal conferma estrazione -->
   <div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
   <div class="toast" id="toast"></div>
+  <!-- Striscia d'errore persistente: resta finché l'utente non la chiude
+       (gli errori nel toast da 2,2s svanivano senza essere letti). -->
+  <div class="err-strip hidden" id="errStrip" role="alert">
+    <span id="errStripMsg"></span>
+    <button class="err-strip-x" id="errStripX" type="button" aria-label="Đóng thông báo lỗi">✕</button>
+  </div>
 
   <script src="/app.js"></script>
   <script src="/account.js"></script>

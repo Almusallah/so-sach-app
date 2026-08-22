@@ -82,6 +82,32 @@ export function verifyClaimToken(token, { secret, now = Date.now(), registry = n
   return { zaloId };
 }
 
+// ---- Sorgente-link con RIUSO ------------------------------------------------------
+// Il bug che questa factory chiude: ogni prompt («menu», testo sconosciuto…)
+// coniava un token NUOVO, e ogni conio ruotava l'hash corrente — il link già
+// consegnato nella CTA moriva appena l'utente scriveva qualunque cosa non
+// riconosciuta. Qui il token in chiaro resta in una cache SOLO in memoria
+// (nello store va sempre e soltanto l'hash: un dump del DB non deve regalare
+// link validi) e si riusa finché verifica: si conia di nuovo solo quando è
+// assente, scaduto, superato da un mint esterno o già consumato. Dopo un
+// riavvio la cache è vuota → il primo prompt conia (e sì, invalida il link
+// pre-riavvio: accettabile, l'alternativa sarebbe persistere il token in chiaro).
+export function makeClaimLinkSource({ secret, registry = null, origin = "", now = Date.now }) {
+  const cache = new Map(); // zaloId → token in chiaro
+  return (zaloId) => {
+    const id = String(zaloId);
+    const cached = cache.get(id);
+    if (cached) {
+      const v = verifyClaimToken(cached, { secret, now: now(), registry });
+      if (!v.error) return origin + "/claim/" + cached;
+      cache.delete(id);
+    }
+    const token = mintClaimToken(id, { secret, now: now(), registry });
+    cache.set(id, token);
+    return origin + "/claim/" + token;
+  };
+}
+
 // ---- Copy (VI-first, coppia EN) ---------------------------------------------------
 // Le due righe vivono qui, accanto alla logica che decide QUANDO escono:
 // testo e condizione in due file diversi divergono sempre (lezione di
